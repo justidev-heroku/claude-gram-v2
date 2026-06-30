@@ -15,23 +15,41 @@
 
 ## Установка
 
-### 1. Клонирование репозитория
-Склонируйте репозиторий проекта и перейдите в папку:
+### Вариант А — Claude Code Marketplace (рекомендуется)
+
+Добавьте маркетплейс и установите плагин прямо из Claude Code:
+
+```shell
+/plugin marketplace add github:justidev-heroku/claude-gram-v2
+/plugin install claude-gram@justidev-marketplace
+```
+
+Затем настройте токен бота:
+
+```shell
+/claude-gram:init
+```
+
+---
+
+### Вариант Б — Ручная установка (клонирование + скрипт)
+
+#### 1. Клонирование репозитория
 ```bash
 git clone https://github.com/justidev-heroku/claude-gram-v2.git
 cd claude-gram-v2
 ```
 
-### 2. Запуск установщика
+#### 2. Запуск установщика
 Скрипт автоматически проверит Python, установит необходимые зависимости (включая `aiogram`, `playwright`, `curl_cffi`) и настроит фоновую службу автозапуска.
 
-#### Linux / macOS:
+##### Linux / macOS:
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-#### Windows (запустите PowerShell от Администратора):
+##### Windows (запустите PowerShell от Администратора):
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\install.ps1

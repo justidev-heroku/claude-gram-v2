@@ -2,6 +2,13 @@
 # -*- coding: utf-8 -*-
 # Claude-Gram v2 Python Installer
 # Fork: claude-gram by tg: @justidev, orig by @ripcats
+#
+# Recommended install via Claude Code marketplace (no symlinks needed):
+#   /plugin marketplace add github:justidev-heroku/claude-gram-v2
+#   /plugin install claude-gram@justidev-marketplace
+#   /claude-gram:init
+#
+# This script is the legacy manual install path.
 
 import os
 import sys

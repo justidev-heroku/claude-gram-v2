@@ -15,23 +15,41 @@ Current version: **v2.0.0**.
 
 ## Installation
 
-### 1. Clone the repository
-Clone the repository and navigate to the project directory:
+### Option A — Claude Code Marketplace (recommended)
+
+Add the marketplace and install the plugin directly from Claude Code:
+
+```shell
+/plugin marketplace add github:justidev-heroku/claude-gram-v2
+/plugin install claude-gram@justidev-marketplace
+```
+
+Then run the init skill to configure your bot token:
+
+```shell
+/claude-gram:init
+```
+
+---
+
+### Option B — Manual install (clone + script)
+
+#### 1. Clone the repository
 ```bash
 git clone https://github.com/justidev-heroku/claude-gram-v2.git
 cd claude-gram-v2
 ```
 
-### 2. Run the installer
+#### 2. Run the installer
 The helper script will automatically verify Python, install all required dependencies (including `aiogram`, `playwright`, `curl_cffi`), and set up the background daemon auto-start.
 
-#### Linux / macOS:
+##### Linux / macOS:
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-#### Windows (Run PowerShell as Admin):
+##### Windows (Run PowerShell as Admin):
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\install.ps1
