@@ -1,7 +1,7 @@
 {
   "name": "claude-gram",
   "description": "Telegram-канал для Claude Code — aiogram bridge с поддержкой тредов, фото/файлов/альбомов, HTML-форматирования и разрешений через inline-кнопки.",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "keywords": [
     "telegram",
     "messaging",

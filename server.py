@@ -1018,7 +1018,7 @@ async def mcp_dispatch(msg: dict) -> None:
                     "tools": {},
                     "experimental": {"claude/channel": {}, "claude/channel/permission": {}},
                 },
-                "serverInfo": {"name": "telegram", "version": "1.0.0"},
+                "serverInfo": {"name": "telegram", "version": "2.0.0"},
                 "instructions": INSTRUCTIONS,
             },
         )
