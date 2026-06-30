@@ -252,7 +252,7 @@ def main() -> int:
         os.execvp(cmd[0], cmd)
         return 0
 
-    cmd = ["claude", "--channels", "plugin:claude-gram-v2@justi-modules"]
+    cmd = ["claude", "--channels", "plugin:claude-gram@justidev-marketplace"]
     try:
         settings_path = Path("##HOME##/.claude/settings.json")
         if settings_path.exists():
@@ -398,14 +398,14 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"{CLR_RED}❌ Ошибка создания запускаемой обертки: {e}{CLR_RESET}")
 
-    # 3.5 Регистрация маркетплейса justi-modules и одобрение плагина
+    # 3.5 Регистрация маркетплейса justidev-marketplace и одобрение плагина
     print(f"\n{CLR_CYAN}[3.5] Регистрация плагина в настройках Claude Code...{CLR_RESET}")
     
     # Создаем папку маркетплейса и символическую ссылку
     marketplace_dir = HOME_DIR / "justi-marketplace"
     try:
         marketplace_dir.mkdir(parents=True, exist_ok=True)
-        plugin_link = marketplace_dir / "claude-gram-v2"
+        plugin_link = marketplace_dir / "claude-gram"
         
         # Если ссылка или папка уже есть, удалим её перед созданием
         if plugin_link.exists() or plugin_link.is_symlink():
@@ -434,25 +434,32 @@ if __name__ == "__main__":
             except Exception:
                 pass
         
-        # Добавляем маркетплейс justi-modules с динамическим путем
+        # Добавляем маркетплейс justidev-marketplace с динамическим путем
         if "extraKnownMarketplaces" not in settings_data:
             settings_data["extraKnownMarketplaces"] = {}
         
-        settings_data["extraKnownMarketplaces"]["justi-modules"] = {
+        settings_data["extraKnownMarketplaces"]["justidev-marketplace"] = {
             "source": {
                 "source": "directory",
                 "path": str(marketplace_dir)
             }
         }
         
-        # Включаем плагин
+        # Очистим старые неиспользуемые маркетплейсы
+        if "justi-modules" in settings_data["extraKnownMarketplaces"]:
+            del settings_data["extraKnownMarketplaces"]["justi-modules"]
+        if "ripcats-marketplace" in settings_data["extraKnownMarketplaces"]:
+            del settings_data["extraKnownMarketplaces"]["ripcats-marketplace"]
+        
+        # Включаем новый плагин
         if "enabledPlugins" not in settings_data:
             settings_data["enabledPlugins"] = {}
-        settings_data["enabledPlugins"]["claude-gram-v2@justi-modules"] = True
+        settings_data["enabledPlugins"]["claude-gram@justidev-marketplace"] = True
         
-        # Выключаем старый плагин
-        if "claude-gram@ripcats-marketplace" in settings_data["enabledPlugins"]:
-            settings_data["enabledPlugins"]["claude-gram@ripcats-marketplace"] = False
+        # Очистим старые неиспользуемые плагины
+        for old_plug in ["claude-gram-v2@justi-modules", "claude-gram@ripcats-marketplace"]:
+            if old_plug in settings_data["enabledPlugins"]:
+                del settings_data["enabledPlugins"][old_plug]
             
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(settings_data, indent=2), encoding="utf-8")
@@ -465,7 +472,7 @@ if __name__ == "__main__":
         print(f"\n{CLR_YELLOW}👉 Сейчас запустится Claude Code для одобрения плагина.{CLR_RESET}")
         print(f"{CLR_YELLOW}Пожалуйста, введите 'y' и нажмите Enter, когда появится запрос на подтверждение.{CLR_RESET}\n")
         time.sleep(2)
-        subprocess.run(["claude", "--channels", "plugin:claude-gram-v2@justi-modules", "-c", "exit"])
+        subprocess.run(["claude", "--channels", "plugin:claude-gram@justidev-marketplace", "-c", "exit"])
     except Exception as e:
         print(f"{CLR_RED}⚠️ Не удалось запустить интерактивное одобрение плагина: {e}{CLR_RESET}")
 
