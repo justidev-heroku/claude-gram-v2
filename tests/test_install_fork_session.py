@@ -19,7 +19,15 @@ def _load_should_fork_session():
     return ns["should_fork_session"]
 
 
+def _load_resume_hint_re():
+    src = INSTALL_PY.read_text("utf-8")
+    m = re.search(r"resume_hint_re = re\.compile\(\s*(r'.*?')\s*\)", src, re.S)
+    assert m, "resume_hint_re not found in install.py wrapper_code"
+    return eval(f"re.compile({m.group(1)})")
+
+
 should_fork_session = _load_should_fork_session()
+resume_hint_re = _load_resume_hint_re()
 
 
 def test_no_fork_when_model_unchanged():
@@ -37,3 +45,27 @@ def test_no_fork_on_first_launch_no_last_model():
 def test_no_fork_when_model_val_missing():
     assert should_fork_session(None, "claude-sonnet-5") is False
     assert should_fork_session("", "claude-sonnet-5") is False
+
+
+def test_resume_hint_matches_valid_uuid():
+    m = resume_hint_re.search(
+        "Resume this session with:\nclaude --resume d52b08a6-183c-438c-8fae-b5844d0d17a9\n"
+    )
+    assert m
+    assert m.group(1) == "d52b08a6-183c-438c-8fae-b5844d0d17a9"
+
+
+def test_resume_hint_matches_when_split_across_reads_via_accumulated_buffer():
+    # Simulates os.read() splitting the hint line across two PTY reads:
+    # the regex must be matched against the accumulated buffer, not a
+    # single chunk, or the id is never captured.
+    chunk1 = "Resume this session with:\nclaude --resume d52b08a6-183c-"
+    chunk2 = "438c-8fae-b5844d0d17a9\n"
+    assert resume_hint_re.search(chunk1) is None
+    buffer = chunk1 + chunk2
+    m = resume_hint_re.search(buffer)
+    assert m and m.group(1) == "d52b08a6-183c-438c-8fae-b5844d0d17a9"
+
+
+def test_resume_hint_rejects_malformed_uuid():
+    assert resume_hint_re.search("claude --resume not-a-real-uuid-but-36-characters-long") is None

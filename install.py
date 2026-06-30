@@ -496,12 +496,6 @@ def main() -> int:
     except Exception:
         pass
     fork_for_model_change = should_fork_session(model_val, last_model)
-    try:
-        if model_val:
-            LAST_MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
-            LAST_MODEL_FILE.write_text(model_val, "utf-8")
-    except Exception:
-        pass
 
     active_sess = get_active_session_id()
     if active_sess:
@@ -550,7 +544,9 @@ def main() -> int:
 
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     cursor_move = re.compile(r'\x1B\[\d*(?:;\d*)*[A-GfHiIJKSTst]')
-    resume_hint_re = re.compile(r'claude --resume ([0-9a-fA-F-]{36})')
+    resume_hint_re = re.compile(
+        r'claude --resume ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+    )
     pty_buffer = ""
     last_alert_time = 0.0
     auth_failed = False
@@ -595,7 +591,7 @@ def main() -> int:
                 pty_buffer = pty_buffer[-10000:]
 
             if not forked_session_captured:
-                m = resume_hint_re.search(clean_data)
+                m = resume_hint_re.search(pty_buffer)
                 if m:
                     new_sess_id = m.group(1)
                     try:
@@ -610,6 +606,12 @@ def main() -> int:
             if not startup_cleared and now - process_start_time > 8.0:
                 pty_buffer = ""
                 startup_cleared = True
+                try:
+                    if model_val:
+                        LAST_MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+                        LAST_MODEL_FILE.write_text(model_val, "utf-8")
+                except Exception:
+                    pass
 
             if now - last_alert_time > 15.0:
                 matched_alert = None
