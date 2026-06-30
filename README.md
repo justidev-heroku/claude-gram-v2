@@ -2,7 +2,7 @@
 
 [![Telegram](https://img.shields.io/badge/Telegram-@justidev-2CA5E0?logo=telegram&logoColor=white)](https://t.me/justidev)
 
-![Claude-Gram v2 Banner](https://raw.githubusercontent.com/justidev-heroku/claude-gram-v2/main/assets/claude_gram_v2.jpg)
+![Claude-Gram v2 Banner](https://raw.githubusercontent.com/justidev-heroku/claude-gram-v2/main/assets/claude_gram_v2.png)
 
 **Claude-Gram v2** — премиальный хостинг-мост Telegram-канала для [Claude Code](https://claude.ai/code) и Antigravity CLI (`agy`), позволяющий отправлять и получать тексты, форматированный код, файлы, логи и фотографии прямо из контекста ИИ-агента.
 
