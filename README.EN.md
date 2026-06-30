@@ -4,7 +4,7 @@
 
 ![Claude-Gram v2 Banner](https://raw.githubusercontent.com/justidev-heroku/claude-gram-v2/main/assets/claude_gram_v2.png)
 
-**Claude-Gram v2** is a premium self-hosted Telegram channel bridge for [Claude Code](https://claude.ai/code) and Antigravity CLI (`agy`). It enables you to send and receive text, formatted code, files, logs, and photos directly from your AI agent context.
+**Claude-Gram v2** is a self-hosted Telegram channel bridge for [Claude Code](https://claude.ai/code). It enables you to send and receive text, formatted code, files, logs, and photos directly from your AI agent context.
 
 > [!NOTE]
 > This project is a fork of the original [claude-gram by @ripcats](https://github.com/ripcats/ripcats-marketplace/tree/main/claude-gram).
