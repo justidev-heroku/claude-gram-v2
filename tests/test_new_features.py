@@ -561,3 +561,25 @@ def test_cmd_usage_locale_independent():
 
 
 
+
+
+
+# ---------------------------------------------------------------------------
+# Тест для команды /check_update
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cmd_check_update():
+    """Тестирует команду check_update при вызове пользователем."""
+    import server
+
+    msg = MagicMock()
+    msg.chat = MagicMock()
+    msg.chat.id = 12345
+    msg.message_thread_id = 99
+    msg.answer = AsyncMock()
+
+    with patch.object(server, "dm_command_gate", return_value={"senderId": "1", "access": {"allowFrom": ["1"]}}), \
+         patch.object(server, "check_for_git_updates", new_callable=AsyncMock) as mock_check:
+        await server.cmd_check_update(msg)
+        mock_check.assert_called_once_with(server.bot, "12345", 99, force=True)

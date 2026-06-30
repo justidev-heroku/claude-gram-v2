@@ -1450,6 +1450,21 @@ async def cmd_allows(msg: Message) -> None:
     await msg.answer(text, parse_mode="HTML")
 
 
+@dp.message(Command("check_update"))
+async def cmd_check_update(msg: Message) -> None:
+    gated = dm_command_gate(msg)
+    if not gated:
+        return
+    status_msg = await msg.answer("🔍 Проверяю наличие обновлений...")
+    try:
+        await check_for_git_updates(bot, str(msg.chat.id), msg.message_thread_id, force=True)
+    finally:
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
+
 @dp.message(Command("start"))
 async def cmd_start(msg: Message) -> None:
     if msg.chat.type != ChatType.PRIVATE or not msg.from_user:
@@ -1540,10 +1555,15 @@ async def get_github_repo_url(repo_path: str) -> str | None:
     except Exception:
         return None
 
-async def check_for_git_updates(bot: Bot, chat_id: str, thread_id: int | None) -> None:
+async def check_for_git_updates(bot: Bot, chat_id: str, thread_id: int | None, force: bool = False) -> None:
     try:
         import shutil
         if not shutil.which("git"):
+            if force:
+                kwargs = {"chat_id": chat_id, "text": "❌ Утилита git не установлена на сервере."}
+                if thread_id is not None:
+                    kwargs["message_thread_id"] = thread_id
+                await bot.send_message(**kwargs)
             return
 
         # Находим корень репозитория
@@ -1583,7 +1603,15 @@ async def check_for_git_updates(bot: Bot, chat_id: str, thread_id: int | None) -
         remote_out, _ = await proc.communicate()
         remote_sha = remote_out.decode().strip()
 
-        if local_sha != remote_sha and remote_sha:
+        if local_sha == remote_sha:
+            if force:
+                kwargs = {"chat_id": chat_id, "text": "🔍 <b>Обновлений не найдено.</b> У вас установлена актуальная версия!", "parse_mode": "HTML"}
+                if thread_id is not None:
+                    kwargs["message_thread_id"] = thread_id
+                await bot.send_message(**kwargs)
+            return
+
+        if remote_sha:
             # Читаем SHA последнего уведомления
             notified_file = STATE_DIR / "last_notified_sha"
             last_notified = ""
@@ -1593,7 +1621,7 @@ async def check_for_git_updates(bot: Bot, chat_id: str, thread_id: int | None) -
                 except Exception:
                     pass
 
-            if remote_sha == last_notified:
+            if not force and remote_sha == last_notified:
                 return
 
             # 3. Получаем список изменений (коммитов)
@@ -3152,6 +3180,7 @@ async def main() -> None:
                 BotCommand(command="resume", description="Выбрать сессию для продолжения диалога"),
                 BotCommand(command="model", description="Сменить модель Claude Code"),
                 BotCommand(command="effort", description="Настроить уровень effort"),
+                BotCommand(command="check_update", description="Проверить наличие обновлений"),
             ],
             scope=BotCommandScopeAllPrivateChats(),
         )
