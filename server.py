@@ -371,7 +371,7 @@ def load_access() -> dict:
     try:
         raw = ACCESS_FILE.read_text("utf-8")
     except (FileNotFoundError, OSError):
-        return {"allowFrom": [], "ackReaction": "👀"}
+        return {"allowFrom": []}
     try:
         parsed = orjson.loads(raw)
     except orjson.JSONDecodeError:
@@ -380,10 +380,9 @@ def load_access() -> dict:
         except OSError:
             pass
         log("access.json is corrupt, moved aside. Starting fresh.")
-        return {"allowFrom": [], "ackReaction": "👀"}
+        return {"allowFrom": []}
     return {
         "allowFrom": parsed.get("allowFrom", []),
-        "ackReaction": parsed.get("ackReaction", "👀"),
         "tz": parsed.get("tz"),
         "threads": parsed.get("threads"),
     }
@@ -489,7 +488,7 @@ INSTRUCTIONS = "\n".join(
         "Available Telegram Tools provided by this plugin (server.py):",
         "   - 'reply': Send text reply to Telegram (prefer format='html' for beautiful HTML formatting).",
         "   - 'reply_file' / 'send_file_to_tg': Send files, logs, photos or documents from the host to Telegram.",
-        "   - 'reactions': Send an emoji reaction to the user's message (do this on every message!).",
+        "   - 'reactions': Send an emoji reaction to the user's message.",
         "   - 'rename_thread': Rename the Telegram session thread/topic to keep it descriptive.",
         "   - 'edit_message': Edit a previously sent message.",
         "   - 'get_history': Get recent message history.",
@@ -499,7 +498,7 @@ INSTRUCTIONS = "\n".join(
         "",
         "Reply with the reply tool — pass chat_id back. Use reply_to (a message_id) only to quote-reply an earlier message; for a normal reply to the latest message, omit reply_to.",
         "",
-        'To send files use reply_file (files: ["/abs/a.png", "/abs/b.png"]) — one file goes as a single message, several go as an album; pass caption and optional reply_to. Use react to add an emoji reaction, and edit_message for interim progress edits (rarely needed; edits don\'t push-notify — send a fresh reply when a long task finishes so the device pings).',
+        'To send files use reply_file (files: ["/abs/a.png", "/abs/b.png"]) — one file goes as a single message, several go as an album; pass caption and optional reply_to. Use reactions to add/change emoji reactions, and edit_message for interim progress edits (rarely needed; edits don\'t push-notify — send a fresh reply when a long task finishes so the device pings).',
         "",
         "This session has its own Telegram topic; your replies land there. Call rename_thread once you know what the session is about (e.g. '🟢 fixing mail server') so the user can tell sessions apart, and update it if focus shifts.",
         "",
@@ -509,7 +508,7 @@ INSTRUCTIONS = "\n".join(
         "",
         "NEVER send generic greetings or notifications upon session startup or resumption (e.g. do not say 'Привет! Я тут' or 'Бот перезапустился' or 'Чем займёмся?'). Respond only to actual requests.",
         "",
-        "On every inbound message from the user, immediately call the reactions tool and pick an emoji that fits the message context and mood. Choose from: 👍 ❤ 😭 😂 😡 😄 😁 🔥 👀 🎉 🎊 💯 🙏 🤔 😱. Do this before or in parallel with your reply — never skip it.",
+        "You can call the reactions tool to send or change emoji reactions to the user's message when appropriate, when you want to express a mood, or when the user explicitly requests it. Choose from: 👍 ❤ 😭 😂 😡 😄 😁 🔥 👀 🎉 🎊 💯 🙏 🤔 😱.",
         "",
         "Always communicate with the user in the language they used to query you. Prefer using format='html' for your replies to display beautiful formatted code block tags (<pre><code class='language-...'>...</code></pre>), bold texts, blockquotes, and lists."
     ]
@@ -686,6 +685,7 @@ pending_permissions: dict = {}
 async def handle_tool_call(msg_id, params: dict) -> None:
     name = params.get("name")
     args = params.get("arguments") or {}
+    log(f"Tool call: {name} with args={args}")
     try:
         if name == "reply":
             result = await tool_reply(args)
@@ -693,7 +693,23 @@ async def handle_tool_call(msg_id, params: dict) -> None:
             result = await tool_reply_file(args)
         elif name == "reactions":
             assert_allowed_chat(str(args["chat_id"]))
-            emoji = args.get("emoji") or "👀"
+            
+            # Извлекаем эмодзи из возможных вариантов аргументов
+            emoji_raw = args.get("emoji") or args.get("reaction") or "👀"
+            if isinstance(emoji_raw, list) and len(emoji_raw) > 0:
+                item = emoji_raw[0]
+                if isinstance(item, dict):
+                    emoji_raw = item.get("emoji") or "👀"
+                else:
+                    emoji_raw = item
+            if isinstance(emoji_raw, dict):
+                emoji_raw = emoji_raw.get("emoji") or "👀"
+                
+            emoji = str(emoji_raw).strip()
+            if not emoji:
+                emoji = "👀"
+                
+            log(f"Calling set_message_reaction: chat_id={args['chat_id']}, message_id={args['message_id']}, emoji={emoji}")
             await bot.set_message_reaction(
                 str(args["chat_id"]), int(args["message_id"]), reaction=[ReactionTypeEmoji(emoji=emoji)]
             )
@@ -711,6 +727,7 @@ async def handle_tool_call(msg_id, params: dict) -> None:
             return
         await respond(msg_id, {"content": [{"type": "text", "text": result}]})
     except Exception as err:  # noqa: BLE001
+        log(f"Tool call {name} failed: {err}")
         await respond(msg_id, {"content": [{"type": "text", "text": f"{name} failed: {err}"}], "isError": True})
 
 
