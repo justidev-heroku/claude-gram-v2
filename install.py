@@ -515,6 +515,7 @@ def main() -> int:
     pty_buffer = ""
     last_alert_time = 0.0
     auth_failed = False
+    process_start_time = time.time()
 
     log_file = None
     try:
@@ -564,9 +565,11 @@ def main() -> int:
                 elif "credit balance too low" in lower_buf or "insufficient credit" in lower_buf or "insufficient funds" in lower_buf:
                     matched_alert = "⚠️ <b>Claude Code: Недостаточно средств на балансе API.</b>"
                 elif "weekly limit" in lower_buf or "weekly budget" in lower_buf:
-                    matched_alert = "⚠️ <b>Claude Code: Достигнут недельный лимит использования.</b>"
+                    if (now - process_start_time > 8.0) or ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf):
+                        matched_alert = "⚠️ <b>Claude Code: Достигнут недельный лимит использования.</b>"
                 elif "5-hour limit" in lower_buf or "5-hour budget" in lower_buf or "5-hour window" in lower_buf:
-                    matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
+                    if (now - process_start_time > 8.0) or ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf):
+                        matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
                 elif "invalid authentication credentials" in lower_buf or "api error: 401" in lower_buf or "please run /login" in lower_buf:
                     matched_alert = "⚠️ <b>Сессия устарела или недействительна.</b> Пожалуйста, выполните повторную авторизацию с помощью команды /login."
                     auth_failed = True
@@ -586,6 +589,13 @@ def main() -> int:
                     delete_thinking_message()
                     send_telegram_alert(matched_alert)
                     last_alert_time = now
+                    # Если это ошибка лимита или аутентификации, завершаем процесс, чтобы не зависать в интерактивных меню
+                    if "лимит" in matched_alert or "Сессия устарела" in matched_alert:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except Exception:
+                            pass
+                        sys.exit(1)
                     for keyword in ["ratelimiterror", "rate limit reached", "rate limit exceeded", 
                                     "overloadederror", "overloaded", "billing limit", 
                                     "credit balance too low", "insufficient credit", "insufficient funds",
