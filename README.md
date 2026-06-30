@@ -20,7 +20,7 @@
 Добавьте маркетплейс и установите плагин прямо из Claude Code:
 
 ```shell
-/plugin marketplace add github:justidev-heroku/claude-gram-v2
+/plugin marketplace add justidev-heroku/claude-gram-v2
 /plugin install claude-gram@justidev-marketplace
 ```
 

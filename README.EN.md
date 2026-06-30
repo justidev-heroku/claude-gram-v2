@@ -20,7 +20,7 @@ Current version: **v2.0.0**.
 Add the marketplace and install the plugin directly from Claude Code:
 
 ```shell
-/plugin marketplace add github:justidev-heroku/claude-gram-v2
+/plugin marketplace add justidev-heroku/claude-gram-v2
 /plugin install claude-gram@justidev-marketplace
 ```
 
