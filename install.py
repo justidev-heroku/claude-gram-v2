@@ -400,6 +400,30 @@ if __name__ == "__main__":
 
     # 3.5 Регистрация маркетплейса justi-modules и одобрение плагина
     print(f"\n{CLR_CYAN}[3.5] Регистрация плагина в настройках Claude Code...{CLR_RESET}")
+    
+    # Создаем папку маркетплейса и символическую ссылку
+    marketplace_dir = HOME_DIR / "justi-marketplace"
+    try:
+        marketplace_dir.mkdir(parents=True, exist_ok=True)
+        plugin_link = marketplace_dir / "claude-gram-v2"
+        
+        # Если ссылка или папка уже есть, удалим её перед созданием
+        if plugin_link.exists() or plugin_link.is_symlink():
+            if plugin_link.is_symlink():
+                plugin_link.unlink()
+            elif plugin_link.is_dir() and not plugin_link.is_symlink():
+                shutil.rmtree(plugin_link)
+            else:
+                plugin_link.unlink()
+
+        if sys.platform != "win32":
+            plugin_link.symlink_to(INSTALL_DIR)
+        else:
+            os.symlink(INSTALL_DIR, plugin_link, target_is_directory=True)
+        print(f"{CLR_GREEN}✅ Символическая ссылка локального маркетплейса создана: {plugin_link} -> {INSTALL_DIR}{CLR_RESET}")
+    except Exception as e:
+        print(f"{CLR_RED}⚠️ Не удалось настроить локальный маркетплейс: {e}{CLR_RESET}")
+
     try:
         import json
         settings_path = HOME_DIR / ".claude" / "settings.json"
@@ -410,14 +434,14 @@ if __name__ == "__main__":
             except Exception:
                 pass
         
-        # Добавляем маркетплейс justi-modules
+        # Добавляем маркетплейс justi-modules с динамическим путем
         if "extraKnownMarketplaces" not in settings_data:
             settings_data["extraKnownMarketplaces"] = {}
         
         settings_data["extraKnownMarketplaces"]["justi-modules"] = {
             "source": {
                 "source": "directory",
-                "path": "/root/justi-marketplace"
+                "path": str(marketplace_dir)
             }
         }
         
