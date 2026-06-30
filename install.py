@@ -516,6 +516,7 @@ def main() -> int:
     last_alert_time = 0.0
     auth_failed = False
     process_start_time = time.time()
+    startup_cleared = False
 
     log_file = None
     try:
@@ -552,6 +553,10 @@ def main() -> int:
                 pty_buffer = pty_buffer[-10000:]
 
             now = time.time()
+            if not startup_cleared and now - process_start_time > 8.0:
+                pty_buffer = ""
+                startup_cleared = True
+
             if now - last_alert_time > 15.0:
                 matched_alert = None
                 lower_buf = pty_buffer.lower()
