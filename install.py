@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 import time
+import threading
 
 # Включение ANSI цветов на Windows
 if sys.platform == "win32":
@@ -76,6 +77,7 @@ def print_banner():
     print()
 
 def print_claudgramik():
+    """Статичный фоллбэк маскота (без анимации)."""
     esc = "\x1b"
     c_orange = f"{esc}[38;2;235;94;40m"
     c_reset = CLR_RESET
@@ -88,9 +90,182 @@ def print_claudgramik():
     print(f"  {c_orange}  ██ ██  ██ ██  {c_reset}")
     print()
 
+
+# ---------------------------------------------------------------------------
+# Анимированный маскот «Клодграмик» — покачивание + моргание
+# ---------------------------------------------------------------------------
+
+_MASCOT_EYES_OPEN = [
+    "  ████████████  ",
+    "  ██  ████  ██  ",
+    "████████████████",
+    "  ████████████  ",
+    "  ██ ██  ██ ██  ",
+]
+
+_MASCOT_EYES_CLOSED = [
+    "  ████████████  ",
+    "  ██████████████",
+    "████████████████",
+    "  ████████████  ",
+    "  ██ ██  ██ ██  ",
+]
+
+_MASCOT_LEGS_UP = [
+    "  ████████████  ",
+    "  ██  ████  ██  ",
+    "████████████████",
+    "  ████████████  ",
+    "    ████████    ",
+]
+
+# (кадр, вертикальный_сдвиг)
+_ANIM_SEQUENCE = [
+    (_MASCOT_EYES_OPEN,   0),   # стоит
+    (_MASCOT_EYES_OPEN,   0),   # стоит (пауза)
+    (_MASCOT_EYES_OPEN,  -1),   # подпрыгивает
+    (_MASCOT_LEGS_UP,    -1),   # в воздухе, ноги поджаты
+    (_MASCOT_EYES_OPEN,   0),   # приземление
+    (_MASCOT_EYES_OPEN,   0),   # стоит
+    (_MASCOT_EYES_CLOSED, 0),   # моргание
+    (_MASCOT_EYES_CLOSED, 0),   # моргание (задержка)
+    (_MASCOT_EYES_OPEN,   0),   # глаза открыты
+]
+
+_anim_stop = threading.Event()
+_anim_thread = None
+# Количество строк, занятых анимацией (для очистки)
+_ANIM_HEIGHT = 9  # 5 строк маскота + 2 отступа + 2 текста
+
+
+def _render_mascot_frame(frame_lines, y_offset, cols):
+    """Рендерит один кадр маскота по центру с вертикальным сдвигом."""
+    esc = "\x1b"
+    c_orange = f"{esc}[38;2;235;94;40m"
+    c_dark   = f"{esc}[38;2;180;60;20m"
+    c_reset  = CLR_RESET
+    c_cyan   = CLR_CYAN
+
+    mascot_width = 16  # ширина самой широкой строки маскота
+    text_right_1 = f"Привет! Я Клодграмик."
+    text_right_2 = f"– Начнём настройку {c_cyan}Claude-Gram v2{c_reset}?"
+
+    pad = max(0, (cols - mascot_width - 40) // 2)
+    prefix = " " * pad
+
+    output_lines = []
+    # Верхний отступ (сдвиг)
+    blank_top = 1 + y_offset
+    blank_bottom = 1 - y_offset
+    for _ in range(max(0, blank_top)):
+        output_lines.append("")
+
+    for i, line in enumerate(frame_lines):
+        # Градиент: верхние строки светлее, нижние — темнее
+        if i < 2:
+            color = c_orange
+        elif i == 2:
+            color = c_orange
+        else:
+            color = c_dark
+
+        right_text = ""
+        if i == 0:
+            right_text = f"    {c_reset}{text_right_1}"
+        elif i == 1:
+            right_text = f"    {c_reset}{text_right_2}"
+
+        output_lines.append(f"{prefix}  {color}{line}{c_reset}{right_text}")
+
+    for _ in range(max(0, blank_bottom)):
+        output_lines.append("")
+
+    return output_lines
+
+
+def _animation_loop():
+    """Фоновый цикл анимации маскота."""
+    cols = shutil.get_terminal_size().columns
+    esc = "\x1b"
+    hide_cursor = f"{esc}[?25l"
+    show_cursor = f"{esc}[?25h"
+
+    sys.stdout.write(hide_cursor)
+    sys.stdout.flush()
+
+    # Запоминаем текущую позицию курсора — будем рисовать ниже баннера
+    # Печатаем пустые строки для резерва места
+    for _ in range(_ANIM_HEIGHT):
+        sys.stdout.write("\n")
+    # Поднимаемся обратно вверх
+    sys.stdout.write(f"{esc}[{_ANIM_HEIGHT}A")
+    sys.stdout.flush()
+
+    frame_idx = 0
+    while not _anim_stop.is_set():
+        frame_lines, y_offset = _ANIM_SEQUENCE[frame_idx % len(_ANIM_SEQUENCE)]
+        rendered = _render_mascot_frame(frame_lines, y_offset, cols)
+
+        # Сохраняем позицию курсора
+        sys.stdout.write(f"{esc}7")
+        # Рисуем кадр
+        for i, line in enumerate(rendered):
+            # Очистка строки + запись
+            sys.stdout.write(f"{esc}[{i + 1}B")  # вниз на i
+        # Возвращаемся к сохраненной позиции и рисуем
+        sys.stdout.write(f"{esc}8")
+
+        # Проще: просто перерисовываем блок целиком
+        sys.stdout.write(f"{esc}7")  # save
+        for line in rendered:
+            # Перейти на начало строки, очистить, напечатать
+            sys.stdout.write(f"\r{esc}[2K{line}\n")
+        # Вернуться назад
+        sys.stdout.write(f"{esc}8")
+        sys.stdout.flush()
+
+        frame_idx += 1
+        _anim_stop.wait(0.2)
+
+    sys.stdout.write(show_cursor)
+    sys.stdout.flush()
+
+
+def start_mascot_animation():
+    """Запускает анимацию маскота в фоновом потоке."""
+    global _anim_thread
+    if not sys.stdout.isatty():
+        # Не в терминале — показываем статичного маскота
+        print_claudgramik()
+        return
+    _anim_stop.clear()
+    _anim_thread = threading.Thread(target=_animation_loop, daemon=True)
+    _anim_thread.start()
+
+
+def stop_mascot_animation():
+    """Останавливает анимацию и очищает область маскота."""
+    global _anim_thread
+    if _anim_thread is None:
+        return
+    _anim_stop.set()
+    _anim_thread.join(timeout=1)
+    _anim_thread = None
+    esc = "\x1b"
+    # Очищаем область анимации
+    for _ in range(_ANIM_HEIGHT):
+        sys.stdout.write(f"\r{esc}[2K\n")
+    # Возвращаемся наверх
+    sys.stdout.write(f"{esc}[{_ANIM_HEIGHT}A")
+    sys.stdout.flush()
+
+
 def main():
     print_banner()
-    print_claudgramik()
+    start_mascot_animation()
+    time.sleep(2.5)  # маскот покачивается пару секунд
+    stop_mascot_animation()
+    print_claudgramik()  # статичный маскот остаётся на экране
     
     # 1. Интерактивный опрос
     print(f"{CLR_CYAN}[1/5] Настройка Telegram конфигурации:{CLR_RESET}")
