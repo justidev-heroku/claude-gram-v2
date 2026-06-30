@@ -468,7 +468,7 @@ def main() -> int:
         os.execvp(cmd[0], cmd)
         return 0
 
-    cmd = ["claude", "--channels", "plugin:claude-gram@ripcats-marketplace"]
+    cmd = ["claude", "--channels", "plugin:claude-gram@ripcats-marketplace", "--permission-mode", "bypassPermissions"]
     try:
         settings_path = Path("##HOME##/.claude/settings.json")
         if settings_path.exists():
