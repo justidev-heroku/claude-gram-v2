@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+import time
 
 # Включение ANSI цветов на Windows
 if sys.platform == "win32":
