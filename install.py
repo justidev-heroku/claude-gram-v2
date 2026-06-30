@@ -251,7 +251,7 @@ def main() -> int:
         os.execvp(cmd[0], cmd)
         return 0
 
-    cmd = ["claude", "--channels", "plugin:claude-gram@ripcats-marketplace"]
+    cmd = ["claude", "--channels", "plugin:claude-gram-v2@justi-modules"]
     try:
         settings_path = Path("##HOME##/.claude/settings.json")
         if settings_path.exists():
@@ -396,6 +396,53 @@ if __name__ == "__main__":
             print(f"{CLR_GREEN}✅ Обертка запуска успешно установлена в {WRAPPER_PATH}{CLR_RESET}")
         except Exception as e:
             print(f"{CLR_RED}❌ Ошибка создания запускаемой обертки: {e}{CLR_RESET}")
+
+    # 3.5 Регистрация маркетплейса justi-modules и одобрение плагина
+    print(f"\n{CLR_CYAN}[3.5] Регистрация плагина в настройках Claude Code...{CLR_RESET}")
+    try:
+        import json
+        settings_path = HOME_DIR / ".claude" / "settings.json"
+        settings_data = {}
+        if settings_path.exists():
+            try:
+                settings_data = json.loads(settings_path.read_text("utf-8"))
+            except Exception:
+                pass
+        
+        # Добавляем маркетплейс justi-modules
+        if "extraKnownMarketplaces" not in settings_data:
+            settings_data["extraKnownMarketplaces"] = {}
+        
+        settings_data["extraKnownMarketplaces"]["justi-modules"] = {
+            "source": {
+                "source": "directory",
+                "path": "/root/justi-marketplace"
+            }
+        }
+        
+        # Включаем плагин
+        if "enabledPlugins" not in settings_data:
+            settings_data["enabledPlugins"] = {}
+        settings_data["enabledPlugins"]["claude-gram-v2@justi-modules"] = True
+        
+        # Выключаем старый плагин
+        if "claude-gram@ripcats-marketplace" in settings_data["enabledPlugins"]:
+            settings_data["enabledPlugins"]["claude-gram@ripcats-marketplace"] = False
+            
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings_data, indent=2), encoding="utf-8")
+        print(f"{CLR_GREEN}✅ Плагин и маркетплейс успешно зарегистрированы в {settings_path}{CLR_RESET}")
+    except Exception as e:
+        print(f"{CLR_RED}⚠️ Ошибка регистрации плагина в settings.json: {e}{CLR_RESET}")
+
+    # Запускаем интерактивное одобрение плагина перед стартом службы
+    try:
+        print(f"\n{CLR_YELLOW}👉 Сейчас запустится Claude Code для одобрения плагина.{CLR_RESET}")
+        print(f"{CLR_YELLOW}Пожалуйста, введите 'y' и нажмите Enter, когда появится запрос на подтверждение.{CLR_RESET}\n")
+        time.sleep(2)
+        subprocess.run(["claude", "--channels", "plugin:claude-gram-v2@justi-modules", "-c", "exit"])
+    except Exception as e:
+        print(f"{CLR_RED}⚠️ Не удалось запустить интерактивное одобрение плагина: {e}{CLR_RESET}")
 
     # 4. Настройка автозапуска / службы
     print(f"\n{CLR_CYAN}[4/5] Настройка фоновой службы автозапуска...{CLR_RESET}")
