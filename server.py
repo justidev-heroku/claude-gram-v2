@@ -1476,15 +1476,6 @@ async def cmd_allows(msg: Message) -> None:
     if gated["senderId"] not in gated["access"]["allowFrom"]:
         return
     auto_allow = not auto_allow
-    
-    # Отправляем команду /auto в PTY Claude Code
-    try:
-        pty_input_path = STATE_DIR / "pty_input"
-        # Hex-строка для b"/auto\n" -> "2f6175746f0a"
-        pty_input_path.write_text("2f6175746f0a", encoding="utf-8")
-    except Exception as e:
-        log(f"Failed to write /auto to pty_input: {e}")
-
     if auto_allow:
         text = (
             f"<b>{EMOJI_SUCCESS} Авто-разрешение запросов активировано</b>\n<blockquote>Все входящие запросы принимаются автоматически.</blockquote>\n"
@@ -3091,37 +3082,6 @@ async def on_permission_button(cb: CallbackQuery) -> None:
         pass
 
 
-@dp.callback_query(F.data.startswith("pty:"))
-async def on_pty_callback(cb: CallbackQuery) -> None:
-    access = load_access()
-    sender_id = str(cb.from_user.id)
-    if sender_id not in access["allowFrom"]:
-        await cb.answer("Нет доступа.", show_alert=True)
-        return
-
-    action = cb.data.split(":", 1)[1]
-    val_to_write = b""
-    if action == "esc":
-        val_to_write = b"\x1b"
-    elif action == "1":
-        val_to_write = b"1\n"
-    elif action == "2":
-        val_to_write = b"2\n"
-    elif action == "3":
-        val_to_write = b"3\n"
-
-    if val_to_write:
-        pty_input_path = STATE_DIR / "pty_input"
-        try:
-            pty_input_path.write_text(val_to_write.hex(), encoding="utf-8")
-            await cb.answer("Ввод отправлен в Claude Code.")
-            await cb.message.edit_reply_markup(reply_markup=None)
-        except Exception as e:
-            await cb.answer(f"Ошибка отправки: {e}", show_alert=True)
-    else:
-        await cb.answer()
-
-
 def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -3147,24 +3107,6 @@ async def on_text(msg: Message) -> None:
             except Exception as e:
                 log(f"Failed to write code to PTY: {e}")
                 await msg.answer(f"{EMOJI_WARNING} Ошибка отправки кода: {e}", parse_mode="HTML")
-            return
-
-    # Проверяем, находится ли бот в интерактивном режиме ожидания ввода в PTY
-    interactive_path = STATE_DIR / "pty_interactive"
-    if interactive_path.exists():
-        text = (msg.text or "").strip()
-        pty_input_path = STATE_DIR / "pty_input"
-        try:
-            val_to_write = (text + "\n").encode("utf-8")
-            pty_input_path.write_text(val_to_write.hex(), encoding="utf-8")
-            try:
-                await msg.react(reaction=[ReactionTypeEmoji(emoji="✍️")])
-            except Exception:
-                pass
-            return
-        except Exception as e:
-            log(f"Failed to write input to pty_input: {e}")
-            await msg.answer(f"⚠️ Ошибка отправки ввода: {e}")
             return
 
     await handle_inbound(msg, msg.html_text or msg.text or "", None)
