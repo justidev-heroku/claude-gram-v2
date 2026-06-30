@@ -803,6 +803,38 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"{CLR_RED}⚠️ Ошибка регистрации плагина в реестрах: {e}{CLR_RESET}")
 
+    # Добавляем предустановленные разрешения в settings.local.json
+    try:
+        settings_local_path = HOME_DIR / ".claude" / "settings.local.json"
+        local_data = {}
+        if settings_local_path.exists():
+            try:
+                local_data = json.loads(settings_local_path.read_text("utf-8"))
+            except Exception:
+                pass
+        
+        if "permissions" not in local_data or not isinstance(local_data["permissions"], dict):
+            local_data["permissions"] = {}
+        if "allow" not in local_data["permissions"] or not isinstance(local_data["permissions"]["allow"], list):
+            local_data["permissions"]["allow"] = []
+            
+        required_perms = [
+            "plugin:claude-gram:*",
+            "plugin:claude-gram:*(*)"
+        ]
+        modified = False
+        for perm in required_perms:
+            if perm not in local_data["permissions"]["allow"]:
+                local_data["permissions"]["allow"].append(perm)
+                modified = True
+                
+        if modified or not settings_local_path.exists():
+            settings_local_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_local_path.write_text(json.dumps(local_data, indent=2), encoding="utf-8")
+            print(f"{CLR_GREEN}✅ Предустановленные разрешения плагина добавлены в {settings_local_path}{CLR_RESET}")
+    except Exception as e:
+        print(f"{CLR_RED}⚠️ Ошибка предустановки разрешений плагина: {e}{CLR_RESET}")
+
     # Запускаем интерактивное одобрение плагина перед стартом службы
     try:
         print(f"\n{CLR_YELLOW}👉 Сейчас запустится Claude Code для одобрения плагина.{CLR_RESET}")
