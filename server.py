@@ -1512,6 +1512,34 @@ def safe_restart() -> None:
         pass
     sys.exit(0)
 
+async def get_github_repo_url(repo_path: str) -> str | None:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "remote", "get-url", "origin",
+            stdout=asyncio.subprocess.PIPE,
+            cwd=repo_path
+        )
+        out, _ = await proc.communicate()
+        url = out.decode().strip()
+        if not url:
+            return None
+        
+        if "@" in url:
+            url_part = url.split("@", 1)[1]
+            if url_part.startswith("github.com:"):
+                url_part = url_part.replace("github.com:", "github.com/")
+            url = "https://" + url_part
+        
+        if url.endswith(".git"):
+            url = url[:-4]
+            
+        if not url.startswith("http"):
+            url = "https://" + url
+            
+        return url
+    except Exception:
+        return None
+
 async def check_for_git_updates(bot: Bot, chat_id: str, thread_id: int | None) -> None:
     try:
         import shutil
@@ -1585,6 +1613,8 @@ async def check_for_git_updates(bot: Bot, chat_id: str, thread_id: int | None) -
                     commits_formatted.append(f"• {msg}")
             
             commits_text = "\n".join(commits_formatted)
+            if not commits_text.strip():
+                commits_text = "Смотрите список изменений по ссылке ниже."
 
             # Запоминаем этот SHA, чтобы больше не слать дубликаты
             try:
@@ -1592,11 +1622,19 @@ async def check_for_git_updates(bot: Bot, chat_id: str, thread_id: int | None) -
             except Exception:
                 pass
 
+            # Получаем URL для diff ссылки
+            repo_url = await get_github_repo_url(repo_path)
+            diff_link_html = ""
+            if repo_url:
+                diff_url = f"{repo_url}/compare/{local_sha[:7]}...{remote_sha[:7]}"
+                diff_link_html = f'\n\n🔍 <a href="{diff_url}">Посмотреть изменения на GitHub</a>'
+
             # 5. Уведомление в TG с кнопками
             notify_text = (
                 f"<b>{EMOJI_REFRESH} Доступно обновление Claude-Gram v2!</b>\n\n"
                 f"<b>Что нового:</b>\n"
-                f"<blockquote>{commits_text}</blockquote>\n"
+                f"<blockquote>{commits_text}</blockquote>"
+                f"{diff_link_html}\n\n"
                 f"<i>Хотите обновить бота сейчас?</i>"
             )
             
