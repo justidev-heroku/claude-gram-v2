@@ -1329,8 +1329,10 @@ async def cmd_model(msg: Message) -> None:
     if not gated:
         return
     access = gated["access"]
+    alias_by_full = {full: a for a, full, _ in MODELS}
     try:
-        current = orjson.loads(SETTINGS_FILE.read_bytes()).get("model") or access.get("model", "sonnet")
+        raw = orjson.loads(SETTINGS_FILE.read_bytes()).get("model")
+        current = alias_by_full.get(raw, raw) or access.get("model", "sonnet")
     except Exception:
         current = access.get("model", "sonnet")
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1363,7 +1365,7 @@ async def on_model_callback(cb: CallbackQuery) -> None:
     if alias not in model_map:
         await cb.answer("Неизвестная модель", show_alert=False)
         return
-    write_setting("model", alias)
+    write_setting("model", model_map[alias])
     access = load_access()
     access["model"] = alias
     save_access(access)
@@ -1402,10 +1404,12 @@ async def cmd_effort(msg: Message) -> None:
     if not gated:
         return
     access = gated["access"]
+    alias_by_full = {full: a for a, full, _ in MODELS}
     try:
         _s = orjson.loads(SETTINGS_FILE.read_bytes())
         current_effort = _s.get("effortLevel") or access.get("effortLevel", "medium")
-        current_model = _s.get("model") or access.get("model", "sonnet")
+        raw_model = _s.get("model")
+        current_model = alias_by_full.get(raw_model, raw_model) or access.get("model", "sonnet")
     except Exception:
         current_effort = access.get("effortLevel", "medium")
         current_model = access.get("model", "sonnet")
