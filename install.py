@@ -819,8 +819,8 @@ if __name__ == "__main__":
             local_data["permissions"]["allow"] = []
             
         required_perms = [
-            "plugin:claude-gram:*",
-            "plugin:claude-gram:*(*)"
+            "mcp__claude-gram__telegram-reply",
+            "mcp__claude-gram__*"
         ]
         modified = False
         for perm in required_perms:
