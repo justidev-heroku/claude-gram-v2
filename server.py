@@ -1795,11 +1795,19 @@ async def start_thinking(chat_id: str, thread_id: int | None) -> None:
 
         task = asyncio.create_task(_animate(sent.message_id))
         active_thinking_tasks[chat_id] = {"msg_id": sent.message_id, "task": task}
+        try:
+            (STATE_DIR / "thinking_msg_id").write_text(str(sent.message_id), "utf-8")
+        except Exception:
+            pass
     except Exception:
         pass
 
 
 def stop_thinking(chat_id: str, thread_id: int | None) -> None:
+    try:
+        (STATE_DIR / "thinking_msg_id").unlink(missing_ok=True)
+    except Exception:
+        pass
     info = active_thinking_tasks.pop(chat_id, None)
     if info is None:
         return

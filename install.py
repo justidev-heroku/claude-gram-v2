@@ -409,6 +409,48 @@ def get_active_session_id() -> str:
             pass
     return ""
 
+def delete_thinking_message() -> None:
+    try:
+        thinking_path = STATE_DIR / "thinking_msg_id"
+        if not thinking_path.exists():
+            return
+        msg_id = thinking_path.read_text("utf-8").strip()
+        if not msg_id:
+            return
+
+        access_path = STATE_DIR / "access.json"
+        if not access_path.exists():
+            return
+        access = json.loads(access_path.read_text("utf-8"))
+        if not access.get("allowFrom"):
+            return
+        chat_id = access["allowFrom"][0]
+
+        env_path = STATE_DIR / ".env"
+        token = None
+        if env_path.exists():
+            for line in env_path.read_text("utf-8").splitlines():
+                if line.startswith("TELEGRAM_BOT_TOKEN="):
+                    token = line.split("=", 1)[1].strip()
+                    break
+        if not token:
+            return
+
+        payload = {
+            "chat_id": chat_id,
+            "message_id": int(msg_id)
+        }
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/deleteMessage",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            response.read()
+        thinking_path.unlink(missing_ok=True)
+    except Exception as e:
+        sys.stderr.write(f"Failed to delete thinking message: {e}\n")
+
 def main() -> int:
     cli = get_active_cli()
     if cli == "agy" or not Path("##HOME##/.claude/.credentials.json").exists():
@@ -417,7 +459,7 @@ def main() -> int:
         os.execvp(cmd[0], cmd)
         return 0
 
-    cmd = ["claude", "--channels", "plugin:claude-gram@ripcats-marketplace"]
+    cmd = ["claude", "--channels", "plugin:claude-gram@ripcats-marketplace", "--permission-mode", "bypassPermissions"]
     try:
         settings_path = Path("##HOME##/.claude/settings.json")
         if settings_path.exists():
@@ -434,7 +476,15 @@ def main() -> int:
         else:
             cmd.extend(["--session-id", active_sess])
     else:
-        cmd.append("-c")
+        import uuid
+        new_uuid = str(uuid.uuid4())
+        try:
+            active_sess_file = Path("##HOME##/.claude/channels/telegram/active_session_id")
+            active_sess_file.parent.mkdir(parents=True, exist_ok=True)
+            active_sess_file.write_text(new_uuid, "utf-8")
+        except Exception:
+            pass
+        cmd.extend(["--session-id", new_uuid])
 
     if sys.platform == "win32":
         # Windows PTY is not supported, run server.py standalone as fallback in wrapper
@@ -513,6 +563,10 @@ def main() -> int:
                     matched_alert = "⚠️ <b>Claude Code: Достигнут лимит оплаты (Billing Limit).</b>"
                 elif "credit balance too low" in lower_buf or "insufficient credit" in lower_buf or "insufficient funds" in lower_buf:
                     matched_alert = "⚠️ <b>Claude Code: Недостаточно средств на балансе API.</b>"
+                elif "weekly limit" in lower_buf or "weekly budget" in lower_buf:
+                    matched_alert = "⚠️ <b>Claude Code: Достигнут недельный лимит использования.</b>"
+                elif "5-hour limit" in lower_buf or "5-hour budget" in lower_buf or "5-hour window" in lower_buf:
+                    matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
                 elif "invalid authentication credentials" in lower_buf or "api error: 401" in lower_buf or "please run /login" in lower_buf:
                     matched_alert = "⚠️ <b>Сессия устарела или недействительна.</b> Пожалуйста, выполните повторную авторизацию с помощью команды /login."
                     auth_failed = True
@@ -529,11 +583,13 @@ def main() -> int:
                     sys.exit(1)
 
                 if matched_alert:
+                    delete_thinking_message()
                     send_telegram_alert(matched_alert)
                     last_alert_time = now
                     for keyword in ["ratelimiterror", "rate limit reached", "rate limit exceeded", 
                                     "overloadederror", "overloaded", "billing limit", 
                                     "credit balance too low", "insufficient credit", "insufficient funds",
+                                    "weekly limit", "weekly budget", "5-hour limit", "5-hour budget", "5-hour window",
                                     "invalid authentication credentials", "api error: 401", "please run /login"]:
                         pty_buffer = re.sub(re.escape(keyword), f"[processed_{keyword}]", pty_buffer, flags=re.IGNORECASE)
 
