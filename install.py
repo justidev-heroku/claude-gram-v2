@@ -360,7 +360,7 @@ def get_active_cli() -> str:
         return ACTIVE_CLI_FILE.read_text("utf-8").strip()
     return "claude"
 
-def send_telegram_alert(text: str) -> None:
+def send_telegram_alert(text: str, reply_markup: dict = None) -> None:
     try:
         access_path = STATE_DIR / "access.json"
         if not access_path.exists():
@@ -394,6 +394,8 @@ def send_telegram_alert(text: str) -> None:
         }
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
 
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{token}/sendMessage",
@@ -533,6 +535,18 @@ def main() -> int:
         pass
 
     while True:
+        # Проверяем наличие файла ввода из Telegram в PTY
+        pty_input_path = STATE_DIR / "pty_input"
+        if pty_input_path.exists():
+            try:
+                hex_data = pty_input_path.read_text("utf-8").strip()
+                if hex_data:
+                    raw_data = bytes.fromhex(hex_data)
+                    os.write(fd, raw_data)
+                pty_input_path.unlink()
+            except Exception as e:
+                sys.stderr.write(f"Failed to process pty_input: {e}\n")
+
         try:
             r, _, _ = select.select([fd], [], [], 1.0)
         except (OSError, ValueError):
@@ -559,6 +573,15 @@ def main() -> int:
             if len(pty_buffer) > 10000:
                 pty_buffer = pty_buffer[-10000:]
 
+            # Если мы увидели промпт ожидания команд, выходим из интерактивного режима
+            if "❯" in clean_data:
+                try:
+                    pty_interactive_file = STATE_DIR / "pty_interactive"
+                    if pty_interactive_file.exists():
+                        pty_interactive_file.unlink()
+                except Exception:
+                    pass
+
             now = time.time()
             if not startup_cleared and now - process_start_time > 8.0:
                 pty_buffer = ""
@@ -566,6 +589,8 @@ def main() -> int:
 
             if now - last_alert_time > 15.0:
                 matched_alert = None
+                matched_interactive = None
+                reply_markup = None
                 lower_buf = pty_buffer.lower()
 
                 if "ratelimiterror" in lower_buf or "rate limit reached" in lower_buf or "rate limit exceeded" in lower_buf:
@@ -597,10 +622,59 @@ def main() -> int:
                         pass
                     sys.exit(1)
 
+                # Проверяем интерактивные окна только если история запуска очищена
+                if startup_cleared:
+                    if "esc to cancel" in lower_buf:
+                        matched_interactive = "esc"
+                        reply_markup = {
+                            "inline_keyboard": [[{"text": "❌ Отмена (Esc)", "callback_data": "pty:esc"}]]
+                        }
+                    elif "what do you want to do?" in lower_buf or "upgrade your plan" in lower_buf:
+                        matched_interactive = "upgrade_menu"
+                        reply_markup = {
+                            "inline_keyboard": [
+                                [
+                                    {"text": "1️⃣ Upgrade", "callback_data": "pty:1"},
+                                    {"text": "2️⃣ Wait for reset", "callback_data": "pty:2"}
+                                ]
+                            ]
+                        }
+                    elif "do you want to proceed?" in lower_buf:
+                        matched_interactive = "proceed_menu"
+                        reply_markup = {
+                            "inline_keyboard": [
+                                [
+                                    {"text": "✅ Yes", "callback_data": "pty:1"},
+                                    {"text": "✅ Yes (Always)", "callback_data": "pty:2"},
+                                    {"text": "❌ No", "callback_data": "pty:3"}
+                                ]
+                            ]
+                        }
+
                 if matched_alert:
                     delete_thinking_message()
                     send_telegram_alert(matched_alert)
                     last_alert_time = now
+                elif matched_interactive:
+                    try:
+                        pty_interactive_file = STATE_DIR / "pty_interactive"
+                        pty_interactive_file.write_text(matched_interactive, encoding="utf-8")
+                    except Exception:
+                        pass
+
+                    delete_thinking_message()
+
+                    cleaned_lines = pty_buffer.strip().splitlines()
+                    last_lines = cleaned_lines[-15:]
+                    display_content = "\n".join(last_lines)
+                    escaped_content = display_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    
+                    alert_text = f"⚙️ <b>Claude Code ожидает ввода:</b>\n<pre>{escaped_content}</pre>"
+                    send_telegram_alert(alert_text, reply_markup=reply_markup)
+                    last_alert_time = now
+
+                    for keyword in ["esc to cancel", "what do you want to do?", "do you want to proceed?"]:
+                        pty_buffer = re.sub(re.escape(keyword), f"[processed_int_{keyword}]", pty_buffer, flags=re.IGNORECASE)
                     # Если это ошибка лимита или аутентификации, завершаем процесс, чтобы не зависать в интерактивных меню
                     if "лимит" in matched_alert or "Сессия устарела" in matched_alert:
                         try:
