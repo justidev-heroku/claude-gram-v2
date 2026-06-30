@@ -424,6 +424,28 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"{CLR_RED}⚠️ Не удалось настроить локальный маркетплейс: {e}{CLR_RESET}")
 
+    # Создаем папку кэша плагина и символическую ссылку на версию
+    cache_plugin_dir = HOME_DIR / ".claude" / "plugins" / "cache" / "justidev-marketplace" / "claude-gram"
+    try:
+        cache_plugin_dir.mkdir(parents=True, exist_ok=True)
+        version_link = cache_plugin_dir / "2.0.0"
+        
+        if version_link.exists() or version_link.is_symlink():
+            if version_link.is_symlink():
+                version_link.unlink()
+            elif version_link.is_dir() and not version_link.is_symlink():
+                shutil.rmtree(version_link)
+            else:
+                version_link.unlink()
+
+        if sys.platform != "win32":
+            version_link.symlink_to(INSTALL_DIR)
+        else:
+            os.symlink(INSTALL_DIR, version_link, target_is_directory=True)
+        print(f"{CLR_GREEN}✅ Символическая ссылка в кэше Claude Code создана: {version_link} -> {INSTALL_DIR}{CLR_RESET}")
+    except Exception as e:
+        print(f"{CLR_RED}⚠️ Не удалось настроить кэш плагина: {e}{CLR_RESET}")
+
     try:
         import json
         settings_path = HOME_DIR / ".claude" / "settings.json"
@@ -463,9 +485,67 @@ if __name__ == "__main__":
             
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(settings_data, indent=2), encoding="utf-8")
-        print(f"{CLR_GREEN}✅ Плагин и маркетплейс успешно зарегистрированы в {settings_path}{CLR_RESET}")
+        print(f"{CLR_GREEN}✅ Настройки settings.json успешно обновлены в {settings_path}{CLR_RESET}")
+
+        # Обновляем installed_plugins.json
+        installed_plugins_path = HOME_DIR / ".claude" / "plugins" / "installed_plugins.json"
+        installed_data = {"version": 2, "plugins": {}}
+        if installed_plugins_path.exists():
+            try:
+                installed_data = json.loads(installed_plugins_path.read_text("utf-8"))
+            except Exception:
+                pass
+        
+        if "plugins" not in installed_data:
+            installed_data["plugins"] = {}
+            
+        installed_data["plugins"]["claude-gram@justidev-marketplace"] = [
+            {
+                "scope": "user",
+                "installPath": str(HOME_DIR / ".claude" / "plugins" / "cache" / "justidev-marketplace" / "claude-gram" / "2.0.0"),
+                "version": "2.0.0",
+                "installedAt": "2026-06-30T08:00:00.000Z",
+                "lastUpdated": "2026-06-30T08:00:00.000Z"
+            }
+        ]
+        
+        # Очистим старые плагины из реестра установленных
+        for old_plug in ["claude-gram-v2@justi-modules", "claude-gram@ripcats-marketplace"]:
+            if old_plug in installed_data["plugins"]:
+                del installed_data["plugins"][old_plug]
+                
+        installed_plugins_path.write_text(json.dumps(installed_data, indent=2), encoding="utf-8")
+        print(f"{CLR_GREEN}✅ Реестр установленных плагинов обновлен в {installed_plugins_path}{CLR_RESET}")
+
+        # Обновляем known_marketplaces.json
+        known_marketplaces_path = HOME_DIR / ".claude" / "plugins" / "known_marketplaces.json"
+        known_data = {}
+        if known_marketplaces_path.exists():
+            try:
+                known_data = json.loads(known_marketplaces_path.read_text("utf-8"))
+            except Exception:
+                pass
+                
+        known_data["justidev-marketplace"] = {
+            "source": {
+                "source": "directory",
+                "path": str(marketplace_dir)
+            },
+            "installLocation": str(marketplace_dir),
+            "lastUpdated": "2026-06-30T08:00:00.000Z"
+        }
+        
+        # Очистим старые маркетплейсы из реестра
+        if "justi-modules" in known_data:
+            del known_data["justi-modules"]
+        if "ripcats-marketplace" in known_data:
+            del known_data["ripcats-marketplace"]
+            
+        known_marketplaces_path.write_text(json.dumps(known_data, indent=2), encoding="utf-8")
+        print(f"{CLR_GREEN}✅ Реестр известных маркетплейсов обновлен в {known_marketplaces_path}{CLR_RESET}")
+
     except Exception as e:
-        print(f"{CLR_RED}⚠️ Ошибка регистрации плагина в settings.json: {e}{CLR_RESET}")
+        print(f"{CLR_RED}⚠️ Ошибка регистрации плагина в реестрах: {e}{CLR_RESET}")
 
     # Запускаем интерактивное одобрение плагина перед стартом службы
     try:
