@@ -1985,7 +1985,7 @@ async def save_logged_in_credentials(chat_id: str) -> None:
             message_thread_id=thread_id
         )
     else:
-        await bot.send_message(chat_id, f"{EMOJI_WARNING} Не удалось найти файлы авторизации после входа.", message_thread_id=thread_id)
+        await bot.send_message(chat_id, f"{EMOJI_WARNING} Не удалось найти файлы авторизации после входа.", parse_mode="HTML", message_thread_id=thread_id)
 
 @dp.message(Command("login"))
 async def cmd_login(msg: Message) -> None:
@@ -1995,7 +1995,7 @@ async def cmd_login(msg: Message) -> None:
         
     chat_id = str(msg.chat.id)
     if chat_id in active_login_flows:
-        await msg.answer(f"{EMOJI_WARNING} Процесс авторизации уже запущен. Отправьте код или подождите завершения.")
+        await msg.answer(f"{EMOJI_WARNING} Процесс авторизации уже запущен. Отправьте код или подождите завершения.", parse_mode="HTML")
         return
         
     args = msg.text.split(maxsplit=1)
@@ -2005,10 +2005,10 @@ async def cmd_login(msg: Message) -> None:
         
     name = args[1].strip()
     if not re.match(r"^[a-zA-Z0-9_-]+$", name):
-        await msg.answer(f"{EMOJI_WARNING} Имя профиля должно содержать только буквы, цифры, дефисы и подчеркивания.")
+        await msg.answer(f"{EMOJI_WARNING} Имя профиля должно содержать только буквы, цифры, дефисы и подчеркивания.", parse_mode="HTML")
         return
         
-    await msg.answer(f"{EMOJI_REFRESH} Запускаю сессию авторизации Claude Code...")
+    await msg.answer(f"{EMOJI_REFRESH} Запускаю сессию авторизации Claude Code...", parse_mode="HTML")
     
     import pty
     import os
@@ -2072,7 +2072,7 @@ async def cmd_login(msg: Message) -> None:
         asyncio.create_task(read_login_pty(chat_id))
     except Exception as e:
         log(f"Failed to start login: {e}")
-        await msg.answer(f"{EMOJI_WARNING} Ошибка запуска авторизации: {e}")
+        await msg.answer(f"{EMOJI_WARNING} Ошибка запуска авторизации: {e}", parse_mode="HTML")
 
 @dp.message(Command("accounts"))
 async def cmd_accounts(msg: Message) -> None:
@@ -2114,14 +2114,14 @@ async def cmd_save_account(msg: Message) -> None:
         
     name = args[1].strip()
     if not re.match(r"^[a-zA-Z0-9_-]+$", name):
-        await msg.answer(f"{EMOJI_WARNING} Имя профиля должно содержать только буквы, цифры, дефисы и подчеркивания.")
+        await msg.answer(f"{EMOJI_WARNING} Имя профиля должно содержать только буквы, цифры, дефисы и подчеркивания.", parse_mode="HTML")
         return
         
     active_credentials = Path("/root/.claude/.credentials.json")
     active_claude_json = Path("/root/.claude.json")
     
     if not active_credentials.exists():
-        await msg.answer(f"{EMOJI_WARNING} Текущая активная сессия авторизации Claude Code отсутствует на сервере.")
+        await msg.answer(f"{EMOJI_WARNING} Текущая активная сессия авторизации Claude Code отсутствует на сервере.", parse_mode="HTML")
         return
         
     try:
@@ -2149,7 +2149,7 @@ async def cmd_save_account(msg: Message) -> None:
             parse_mode="HTML"
         )
     except Exception as e:
-        await msg.answer(f"{EMOJI_WARNING} Ошибка сохранения профиля: {e}")
+        await msg.answer(f"{EMOJI_WARNING} Ошибка сохранения профиля: {e}", parse_mode="HTML")
 
 
 # Кэш кулдауна рефреша: {str(creds_path): unix_timestamp_можно_снова}
@@ -2393,7 +2393,7 @@ async def cmd_switch_account(msg: Message) -> None:
         )
         safe_restart()
     except Exception as e:
-        await msg.answer(f"{EMOJI_WARNING} Ошибка переключения: {e}")
+        await msg.answer(f"{EMOJI_WARNING} Ошибка переключения: {e}", parse_mode="HTML")
 
 def get_active_session_id() -> str:
     active_sess_file = Path("/root/.claude/channels/telegram/active_session_id")
@@ -2628,7 +2628,7 @@ async def on_resume_callback(cb: CallbackQuery) -> None:
             active_sess_file.parent.mkdir(parents=True, exist_ok=True)
             active_sess_file.write_text(new_uuid, "utf-8")
         except Exception as e:
-            await cb.message.answer(f"{EMOJI_WARNING} Ошибка создания сессии: {e}")
+            await cb.message.answer(f"{EMOJI_WARNING} Ошибка создания сессии: {e}", parse_mode="HTML")
             await cb.answer()
             return
 
@@ -2648,7 +2648,7 @@ async def on_resume_callback(cb: CallbackQuery) -> None:
         session_id = action_parts[2]
         session_file = Path(f"/root/.claude/projects/-root/{session_id}.jsonl")
         if not session_file.exists():
-            await cb.message.answer(f"{EMOJI_WARNING} Файл сессии не найден.")
+            await cb.message.answer(f"{EMOJI_WARNING} Файл сессии не найден.", parse_mode="HTML")
             await cb.answer()
             return
         try:
@@ -2657,7 +2657,7 @@ async def on_resume_callback(cb: CallbackQuery) -> None:
             active_sess_file.parent.mkdir(parents=True, exist_ok=True)
             active_sess_file.write_text(session_id, "utf-8")
         except Exception as e:
-            await cb.message.answer(f"{EMOJI_WARNING} Ошибка переключения сессии: {e}")
+            await cb.message.answer(f"{EMOJI_WARNING} Ошибка переключения сессии: {e}", parse_mode="HTML")
             await cb.answer()
             return
 
@@ -2832,7 +2832,7 @@ async def cmd_logout(msg: Message) -> None:
         )
         safe_restart()
     except Exception as e:
-        await msg.answer(f"{EMOJI_WARNING} Ошибка при выходе: {e}")
+        await msg.answer(f"{EMOJI_WARNING} Ошибка при выходе: {e}", parse_mode="HTML")
 
 
 @dp.message(Command("delete_account"))
@@ -2889,7 +2889,7 @@ async def cmd_delete_account(msg: Message) -> None:
             await msg.answer(f"{EMOJI_SUCCESS} Профиль <code>{name}</code> успешно удален.", parse_mode="HTML")
             
     except Exception as e:
-        await msg.answer(f"{EMOJI_WARNING} Ошибка удаления профиля: {e}")
+        await msg.answer(f"{EMOJI_WARNING} Ошибка удаления профиля: {e}", parse_mode="HTML")
 
 
 @dp.message(Command("close"))
@@ -3106,10 +3106,10 @@ async def on_text(msg: Message) -> None:
                 os.write(flow["fd"], (code + "\n").encode())
                 flow["status"] = "waiting_code_confirmation"
                 flow["buffer"] = ""
-                await msg.answer(f"{EMOJI_REFRESH} Проверяю код авторизации...")
+                await msg.answer(f"{EMOJI_REFRESH} Проверяю код авторизации...", parse_mode="HTML")
             except Exception as e:
                 log(f"Failed to write code to PTY: {e}")
-                await msg.answer(f"{EMOJI_WARNING} Ошибка отправки кода: {e}")
+                await msg.answer(f"{EMOJI_WARNING} Ошибка отправки кода: {e}", parse_mode="HTML")
             return
 
     await handle_inbound(msg, msg.html_text or msg.text or "", None)
