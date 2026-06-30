@@ -1476,6 +1476,15 @@ async def cmd_allows(msg: Message) -> None:
     if gated["senderId"] not in gated["access"]["allowFrom"]:
         return
     auto_allow = not auto_allow
+    
+    # Отправляем команду /auto в PTY Claude Code
+    try:
+        pty_input_path = STATE_DIR / "pty_input"
+        # Hex-строка для b"/auto\n" -> "2f6175746f0a"
+        pty_input_path.write_text("2f6175746f0a", encoding="utf-8")
+    except Exception as e:
+        log(f"Failed to write /auto to pty_input: {e}")
+
     if auto_allow:
         text = (
             f"<b>{EMOJI_SUCCESS} Авто-разрешение запросов активировано</b>\n<blockquote>Все входящие запросы принимаются автоматически.</blockquote>\n"
