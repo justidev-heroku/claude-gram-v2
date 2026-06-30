@@ -1567,15 +1567,7 @@ async def check_for_git_updates(bot: Bot, chat_id: str, thread_id: int | None, f
             return
 
         # Находим корень репозитория
-        repo_dir = Path(__file__).parent.resolve()
-        while repo_dir != repo_dir.parent:
-            if (repo_dir / ".git").exists():
-                break
-            repo_dir = repo_dir.parent
-        else:
-            repo_dir = Path(__file__).parent.resolve()
-
-        repo_path = str(repo_dir)
+        repo_path = "/root/claude-gram-v2"
 
         # 1. git fetch
         proc = await asyncio.create_subprocess_exec(
