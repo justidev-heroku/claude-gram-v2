@@ -1324,7 +1324,10 @@ def buffer_album_item(msg: Message, item: dict) -> None:
 
 
 async def cmd_model(msg: Message) -> None:
-    access = load_access()
+    gated = dm_command_gate(msg)
+    if not gated:
+        return
+    access = gated["access"]
     try:
         current = orjson.loads(SETTINGS_FILE.read_bytes()).get("model") or access.get("model", "sonnet")
     except Exception:
@@ -1349,6 +1352,10 @@ async def cmd_model(msg: Message) -> None:
 
 @dp.callback_query(F.data.startswith("model:"))
 async def on_model_callback(cb: CallbackQuery) -> None:
+    access = load_access()
+    if str(cb.from_user.id) not in access["allowFrom"]:
+        await cb.answer("Нет доступа.")
+        return
     alias = cb.data.split(":", 1)[1]
     model_map = {a: full for a, full, _ in MODELS}
     display_map = {a: d for a, _, d in MODELS}
@@ -1380,13 +1387,20 @@ async def on_model_callback(cb: CallbackQuery) -> None:
 
 @dp.callback_query(F.data == "restart_confirm")
 async def on_restart_confirm(cb: CallbackQuery) -> None:
+    access = load_access()
+    if str(cb.from_user.id) not in access["allowFrom"]:
+        await cb.answer("Нет доступа.")
+        return
     await cb.answer("Перезапускаю...", show_alert=False)
     await cb.message.edit_text("🔄 Перезапуск...", parse_mode="HTML")
     safe_restart()
 
 
 async def cmd_effort(msg: Message) -> None:
-    access = load_access()
+    gated = dm_command_gate(msg)
+    if not gated:
+        return
+    access = gated["access"]
     try:
         _s = orjson.loads(SETTINGS_FILE.read_bytes())
         current_effort = _s.get("effortLevel") or access.get("effortLevel", "medium")
@@ -1417,6 +1431,10 @@ async def cmd_effort(msg: Message) -> None:
 
 @dp.callback_query(F.data.startswith("effort:"))
 async def on_effort_callback(cb: CallbackQuery) -> None:
+    access = load_access()
+    if str(cb.from_user.id) not in access["allowFrom"]:
+        await cb.answer("Нет доступа.")
+        return
     level = cb.data.split(":", 1)[1]
     valid = {lvl for lvl, _ in EFFORT_LEVELS}
     if level not in valid:

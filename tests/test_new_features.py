@@ -187,7 +187,7 @@ async def test_effort_haiku_shows_warning():
     msg = MagicMock()
     msg.chat.id = "1"
 
-    with patch.object(server, "load_access", return_value={"model": "haiku", "effortLevel": "medium"}), \
+    with patch.object(server, "dm_command_gate", return_value={"access": {"model": "haiku", "effortLevel": "medium"}, "senderId": "1"}), \
          patch.object(server, "SETTINGS_FILE", Path("/nonexistent/settings.json")), \
          patch.object(server, "bot") as mock_bot, \
          patch.object(server, "thread_kwargs", return_value={}):
