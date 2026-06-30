@@ -4,7 +4,7 @@
 
 ![Claude-Gram v2 Banner](https://raw.githubusercontent.com/justidev-heroku/claude-gram-v2/main/assets/claude_gram_v2.png)
 
-**Claude-Gram v2** – хостинг-мост Telegram-канала для [Claude Code](https://claude.ai/code), позволяющий отправлять и получать тексты, форматированный код, файлы, логи и фотографии прямо из контекста ИИ-агента.
+**Claude-Gram v2** – мост Telegram-канала для [Claude Code](https://claude.ai/code), позволяющий отправлять и получать тексты, форматированный код, файлы, логи и фотографии прямо из контекста ИИ-агента.
 
 > [!NOTE]
 > Этот проект является форком оригинального репозитория [claude-gram от @ripcats](https://github.com/ripcats/ripcats-marketplace/tree/main/claude-gram).
