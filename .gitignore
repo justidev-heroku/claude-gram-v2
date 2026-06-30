@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+graphify-out/
+.env
+last_notified_sha
+history.db
+inbox/
+active_cli
+session_thread_id
