@@ -354,6 +354,7 @@ from pathlib import Path
 STATE_DIR = Path("##HOME##/.claude/channels/telegram")
 ACTIVE_CLI_FILE = STATE_DIR / "active_cli"
 LOG_FILE_PATH = STATE_DIR / "bot.log"
+LAST_MODEL_FILE = STATE_DIR / "last_launched_model"
 
 def get_active_cli() -> str:
     if ACTIVE_CLI_FILE.exists():
@@ -418,6 +419,15 @@ def get_active_session_id() -> str:
             pass
     return ""
 
+def should_fork_session(model_val: str, last_model: str) -> bool:
+    # claude --resume не применяет --model к уже идущей сессии — без форка
+    # смена модели через /model молча не сработает.
+    if not model_val:
+        return False
+    if not last_model:
+        return False
+    return model_val != last_model
+
 def delete_thinking_message() -> None:
     try:
         thinking_path = STATE_DIR / "thinking_msg_id"
@@ -469,6 +479,7 @@ def main() -> int:
         return 0
 
     cmd = ["claude", "--channels", "plugin:claude-gram@ripcats-marketplace"]
+    model_val = None
     try:
         settings_path = Path("##HOME##/.claude/settings.json")
         if settings_path.exists():
@@ -477,11 +488,28 @@ def main() -> int:
                 cmd.extend(["--model", model_val])
     except Exception:
         pass
+
+    last_model = ""
+    try:
+        if LAST_MODEL_FILE.exists():
+            last_model = LAST_MODEL_FILE.read_text("utf-8").strip()
+    except Exception:
+        pass
+    fork_for_model_change = should_fork_session(model_val, last_model)
+    try:
+        if model_val:
+            LAST_MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LAST_MODEL_FILE.write_text(model_val, "utf-8")
+    except Exception:
+        pass
+
     active_sess = get_active_session_id()
     if active_sess:
         session_file = Path(f"##HOME##/.claude/projects/-root/{active_sess}.jsonl")
         if session_file.exists() and session_file.stat().st_size > 0:
             cmd.extend(["--resume", active_sess])
+            if fork_for_model_change:
+                cmd.append("--fork-session")
         else:
             cmd.extend(["--session-id", active_sess])
     else:
@@ -522,11 +550,13 @@ def main() -> int:
 
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     cursor_move = re.compile(r'\x1B\[\d*(?:;\d*)*[A-GfHiIJKSTst]')
+    resume_hint_re = re.compile(r'claude --resume ([0-9a-fA-F-]{36})')
     pty_buffer = ""
     last_alert_time = 0.0
     auth_failed = False
     process_start_time = time.time()
     startup_cleared = False
+    forked_session_captured = not fork_for_model_change
 
     log_file = None
     try:
@@ -563,6 +593,18 @@ def main() -> int:
             pty_buffer += clean_data
             if len(pty_buffer) > 10000:
                 pty_buffer = pty_buffer[-10000:]
+
+            if not forked_session_captured:
+                m = resume_hint_re.search(clean_data)
+                if m:
+                    new_sess_id = m.group(1)
+                    try:
+                        active_sess_file = Path("##HOME##/.claude/channels/telegram/active_session_id")
+                        active_sess_file.parent.mkdir(parents=True, exist_ok=True)
+                        active_sess_file.write_text(new_sess_id, "utf-8")
+                    except Exception:
+                        pass
+                    forked_session_captured = True
 
             now = time.time()
             if not startup_cleared and now - process_start_time > 8.0:
