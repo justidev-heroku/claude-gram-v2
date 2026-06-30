@@ -521,6 +521,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, sig_handler)
 
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    cursor_move = re.compile(r'\x1B\[\d*(?:;\d*)*[A-GfHiIJKSTst]')
     pty_buffer = ""
     last_alert_time = 0.0
     auth_failed = False
@@ -568,7 +569,9 @@ def main() -> int:
                     log_file.flush()
                 except Exception:
                     pass
-            clean_data = ansi_escape.sub("", decoded)
+            clean_data = cursor_move.sub(" ", decoded)
+            clean_data = ansi_escape.sub("", clean_data)
+            clean_data = re.sub(r'[ \t]+', ' ', clean_data)
             pty_buffer += clean_data
             if len(pty_buffer) > 10000:
                 pty_buffer = pty_buffer[-10000:]
