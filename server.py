@@ -136,9 +136,10 @@ OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
 MODELS = [
-    ("sonnet", "claude-sonnet-4-6",        "Sonnet 4.6"),
-    ("opus",   "claude-opus-4-8",           "Opus 4.8"),
-    ("haiku",  "claude-haiku-4-5-20251001", "Haiku 4.5"),
+    ("sonnet5", "claude-sonnet-5",          "Sonnet 5"),
+    ("sonnet",  "claude-sonnet-4-6",        "Sonnet 4.6"),
+    ("opus",    "claude-opus-4-8",          "Opus 4.8"),
+    ("haiku",   "claude-haiku-4-5-20251001","Haiku 4.5"),
 ]
 
 EFFORT_LEVELS = [
