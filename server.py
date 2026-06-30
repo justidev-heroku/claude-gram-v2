@@ -2402,17 +2402,6 @@ def get_active_session_id() -> str:
             val = active_sess_file.read_text("utf-8").strip()
             if val and val != "new":
                 return val
-            return ""  # sentinel – fresh session, skip fallback
-        except Exception:
-            pass
-    # Fallback to newest .jsonl file
-    project_dir = Path("/root/.claude/projects/-root")
-    if project_dir.exists():
-        try:
-            files = list(project_dir.glob("*.jsonl"))
-            if files:
-                files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                return files[0].stem
         except Exception:
             pass
     return ""

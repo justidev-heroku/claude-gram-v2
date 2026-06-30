@@ -405,16 +405,6 @@ def get_active_session_id() -> str:
             val = active_sess_file.read_text("utf-8").strip()
             if val and val != "new":
                 return val
-            return ""
-        except Exception:
-            pass
-    project_dir = Path("##HOME##/.claude/projects/-root")
-    if project_dir.exists():
-        try:
-            files = list(project_dir.glob("*.jsonl"))
-            if files:
-                files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                return files[0].stem
         except Exception:
             pass
     return ""
@@ -526,6 +516,17 @@ def main() -> int:
                 elif "invalid authentication credentials" in lower_buf or "api error: 401" in lower_buf or "please run /login" in lower_buf:
                     matched_alert = "⚠️ <b>Сессия устарела или недействительна.</b> Пожалуйста, выполните повторную авторизацию с помощью команды /login."
                     auth_failed = True
+                elif "no conversation found to continue" in lower_buf:
+                    try:
+                        active_sess_file = STATE_DIR / "active_session_id"
+                        active_sess_file.write_text("new", encoding="utf-8")
+                    except Exception:
+                        pass
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
+                    sys.exit(1)
 
                 if matched_alert:
                     send_telegram_alert(matched_alert)
