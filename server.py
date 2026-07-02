@@ -32,7 +32,7 @@ import orjson
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction, ChatType
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import (
     BotCommand,
@@ -382,11 +382,8 @@ def load_access() -> dict:
             pass
         log("access.json is corrupt, moved aside. Starting fresh.")
         return {"allowFrom": []}
-    return {
-        "allowFrom": parsed.get("allowFrom", []),
-        "tz": parsed.get("tz"),
-        "threads": parsed.get("threads"),
-    }
+    parsed.setdefault("allowFrom", [])
+    return parsed
 
 
 def save_access(a: dict) -> None:
@@ -408,10 +405,8 @@ def assert_sendable(f: str) -> None:
     inbox = os.path.join(state_real, "inbox")
     allowed_roots = [
         inbox + os.sep,
-        "/root/ripcats-marketplace" + os.sep,
-        "/root/justi-modules" + os.sep,
-        "/root/bot" + os.sep,
-        "/root/" ,
+        str(Path(__file__).parent.resolve()) + os.sep,
+        str(Path.home()) + os.sep,
         "/tmp/",
     ]
 
@@ -711,9 +706,16 @@ async def handle_tool_call(msg_id, params: dict) -> None:
                 emoji = "👀"
                 
             log(f"Calling set_message_reaction: chat_id={args['chat_id']}, message_id={args['message_id']}, emoji={emoji}")
-            await bot.set_message_reaction(
-                str(args["chat_id"]), int(args["message_id"]), reaction=[ReactionTypeEmoji(emoji=emoji)]
-            )
+            try:
+                await bot.set_message_reaction(
+                    str(args["chat_id"]), int(args["message_id"]), reaction=[ReactionTypeEmoji(emoji=emoji)]
+                )
+            except TelegramRetryAfter as e:
+                log(f"FloodWait {e.retry_after}s in set_message_reaction, retrying once")
+                await asyncio.sleep(e.retry_after)
+                await bot.set_message_reaction(
+                    str(args["chat_id"]), int(args["message_id"]), reaction=[ReactionTypeEmoji(emoji=emoji)]
+                )
             stop_thinking(str(args["chat_id"]), session_thread_id)
             result = "reacted"
         elif name == "edit_message":
@@ -743,6 +745,11 @@ async def _send_one_text(chat_id: str, text: str, parse_mode, reply_params) -> l
     if parse_mode:
         kwargs["parse_mode"] = parse_mode
     try:
+        sent = await bot.send_message(chat_id, text, **kwargs)
+        return [sent.message_id]
+    except TelegramRetryAfter as e:
+        log(f"FloodWait {e.retry_after}s in send_message, retrying once")
+        await asyncio.sleep(e.retry_after)
         sent = await bot.send_message(chat_id, text, **kwargs)
         return [sent.message_id]
     except TelegramBadRequest as e:
@@ -914,9 +921,16 @@ async def tool_edit(args: dict) -> str:
     kwargs = {}
     if parse_mode:
         kwargs["parse_mode"] = parse_mode
-    edited = await bot.edit_message_text(
-        text=args["text"], chat_id=chat_id, message_id=int(args["message_id"]), **kwargs
-    )
+    try:
+        edited = await bot.edit_message_text(
+            text=args["text"], chat_id=chat_id, message_id=int(args["message_id"]), **kwargs
+        )
+    except TelegramRetryAfter as e:
+        log(f"FloodWait {e.retry_after}s in edit_message_text, retrying once")
+        await asyncio.sleep(e.retry_after)
+        edited = await bot.edit_message_text(
+            text=args["text"], chat_id=chat_id, message_id=int(args["message_id"]), **kwargs
+        )
     mid = edited.message_id if hasattr(edited, "message_id") else args["message_id"]
     await log_message("out", chat_id, mid, args["text"], "edit", thread_id=session_thread_id)
     return f"edited (id: {mid})"
@@ -1001,11 +1015,16 @@ async def handle_permission_request(params: dict) -> None:
     input_preview = params.get("input_preview", "")
     access = load_access()
 
+    # Очищаем устаревшие разрешения (старше 10 минут)
+    cutoff = time.time() - 600
+    for rid in [k for k, v in pending_permissions.items() if v.get("ts", 0) < cutoff]:
+        pending_permissions.pop(rid, None)
+
     if auto_allow:
         await notify("notifications/claude/channel/permission", {"request_id": request_id, "behavior": "allow"})
         return
 
-    pending_permissions[request_id] = {"tool_name": tool_name, "description": description, "input_preview": input_preview}
+    pending_permissions[request_id] = {"tool_name": tool_name, "description": description, "input_preview": input_preview, "ts": time.time()}
     text = _perm_header(tool_name)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -1532,7 +1551,7 @@ def list_profiles() -> list[dict]:
     import glob
     import json
     profiles = []
-    files = glob.glob("/root/.claude/.credentials.*.json")
+    files = glob.glob(str(Path.home() / ".claude" / ".credentials.*.json"))
     for f in files:
         basename = os.path.basename(f)
         name = basename[len(".credentials."):-len(".json")]
@@ -1608,7 +1627,7 @@ async def check_for_git_updates(bot: Bot, chat_id: str, thread_id: int | None, f
             return
 
         # Находим корень репозитория
-        repo_path = "/root/claude-gram-v2"
+        repo_path = str(Path(__file__).parent.resolve())
 
         # 1. git fetch
         proc = await asyncio.create_subprocess_exec(
@@ -1743,10 +1762,10 @@ async def auto_update_loop(shutdown_evt: asyncio.Event, bot: Bot) -> None:
             log(f"Auto-update cycle error: {e}")
             
         try:
-            for _ in range(900):
-                if shutdown_evt.is_set():
-                    break
-                await asyncio.sleep(1)
+            await asyncio.wait_for(shutdown_evt.wait(), timeout=900)
+            break  # shutdown requested
+        except asyncio.TimeoutError:
+            pass
         except asyncio.CancelledError:
             break
 
@@ -2709,7 +2728,17 @@ async def cmd_usage(msg: Message) -> None:
             env=env
         )
         
-        stdout_bytes, _ = await process.communicate(input=b"/usage\n")
+        try:
+            stdout_bytes, _ = await asyncio.wait_for(
+                process.communicate(input=b"/usage\n"), timeout=30
+            )
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            await progress_msg.edit_text("❌ Таймаут: Claude Code не ответил за 30 секунд.", parse_mode="HTML")
+            return
         stdout = stdout_bytes.decode("utf-8", errors="ignore")
         
         session_match = re.search(r"Current session:\s*(\d+)%\s*used\s*·\s*resets\s*([^\n\r]+)", stdout)
@@ -2719,6 +2748,15 @@ async def cmd_usage(msg: Message) -> None:
             # Check for Rate Limit message
             if "rate limited" in stdout.lower():
                 await progress_msg.edit_text("⚠️ <b>Лимиты временно недоступны</b> (превышен лимит запросов к API). Пожалуйста, попробуйте позже.", parse_mode="HTML")
+                return
+
+            if "usage limit" in stdout.lower() or "limit reached" in stdout.lower() or "exceeded" in stdout.lower():
+                lines = [l.strip() for l in stdout.splitlines() if l.strip()]
+                detail = " ".join(lines[:2]) if lines else "Лимиты исчерпаны."
+                await progress_msg.edit_text(
+                    f"🚫 <b>Лимит Claude Code исчерпан</b>\n<blockquote>{_esc(detail)}</blockquote>",
+                    parse_mode="HTML"
+                )
                 return
 
             # Check if this is a subscription-based account
@@ -2761,7 +2799,7 @@ async def cmd_usage(msg: Message) -> None:
         now = datetime.datetime.now(datetime.timezone.utc)
         
         def parse_date(date_str):
-            date_str_clean = date_str.replace("(UTC)", "").strip()
+            date_str_clean = re.sub(r'\([^)]*\)', '', date_str).strip()
             if ":" not in date_str_clean:
                 date_str_clean = date_str_clean.replace("am", ":00am").replace("pm", ":00pm")
             
@@ -2962,7 +3000,16 @@ async def on_git_update_now(cb: CallbackQuery) -> None:
 
         repo_path = str(repo_dir)
 
-        # Выполняем git reset --hard
+        # Сначала делаем fetch чтобы получить актуальные данные
+        proc = await asyncio.create_subprocess_exec(
+            "git", "fetch", "origin", "main",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=repo_path
+        )
+        await proc.communicate()
+
+        # Затем reset --hard
         proc = await asyncio.create_subprocess_exec(
             "git", "reset", "--hard", "origin/main",
             stdout=asyncio.subprocess.PIPE,

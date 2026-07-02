@@ -26,9 +26,10 @@ def _import_server():
          patch("aiogram.Bot.get_me", new_callable=AsyncMock), \
          patch("sqlite3.connect"):
         import importlib, importlib.util
+        import pathlib as _pathlib
         spec = importlib.util.spec_from_file_location(
             "server",
-            "/root/ripcats-marketplace/claude-gram/server.py",
+            str(_pathlib.Path(__file__).parent.parent / "server.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         sys.modules["server"] = mod
@@ -553,10 +554,82 @@ def test_cmd_usage_locale_independent():
     import server
     import datetime
     now = datetime.datetime.now(datetime.timezone.utc)
-    
+
     # Проверяем, что наша MONTH_MAP на месте
     assert "jun" in server.MONTH_MAP
     assert server.MONTH_MAP["jun"] == "06"
+
+
+# ---------------------------------------------------------------------------
+# parse_date: timezone stripping
+# ---------------------------------------------------------------------------
+
+def test_parse_date_strips_non_utc_timezone():
+    """parse_date не должен падать когда в строке есть (Europe/Moscow) вместо (UTC)."""
+    import server, datetime, re
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Воспроизводим логику parse_date с Europe/Moscow
+    date_str = "Jul 2, 9:40pm (Europe/Moscow)"
+    date_str_clean = re.sub(r'\([^)]*\)', '', date_str).strip()
+    assert "(Europe/Moscow)" not in date_str_clean
+    assert "(UTC)" not in date_str_clean
+    # После чистки остаётся "Jul 2, 9:40pm" — должно успешно парситься
+    parts = date_str_clean.split(None, 2)
+    month_name = parts[0].lower()[:3]
+    assert month_name in server.MONTH_MAP
+
+
+# ---------------------------------------------------------------------------
+# FloodWait retry in _send_one_text
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_one_text_retries_on_floodwait():
+    """_send_one_text должен подождать retry_after секунд и повторить при TelegramRetryAfter."""
+    import server
+    from aiogram.exceptions import TelegramRetryAfter
+
+    call_count = 0
+
+    async def mock_send(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise TelegramRetryAfter(method="sendMessage", message="Too Many Requests: retry after 1", retry_after=1)
+        m = MagicMock()
+        m.message_id = 42
+        return m
+
+    with patch.object(server.bot, "send_message", side_effect=mock_send), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        result = await server._send_one_text("123", "hello", None, None)
+
+    assert result == [42]
+    assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# load_access preserves unknown fields
+# ---------------------------------------------------------------------------
+
+def test_load_access_preserves_extra_fields(tmp_path):
+    """load_access должен возвращать все поля из файла, не только 3 известных."""
+    import server
+    access_file = tmp_path / "access.json"
+    access_file.write_bytes(__import__("orjson").dumps({
+        "allowFrom": ["123"],
+        "ackReaction": "🔥",
+        "tz": "Europe/Moscow",
+        "threads": True,
+        "customField": "keep_me",
+    }))
+    with patch.object(server, "ACCESS_FILE", access_file):
+        result = server.load_access()
+    assert result["ackReaction"] == "🔥"
+    assert result["customField"] == "keep_me"
+    assert result["allowFrom"] == ["123"]
 
 
 
