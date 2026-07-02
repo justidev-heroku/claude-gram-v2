@@ -1021,9 +1021,9 @@ async def handle_permission_request(params: dict) -> None:
         pending_permissions.pop(rid, None)
 
     # Вытаскиваем первый значимый аргумент из input_preview для пузыря
-    def _tool_preview(ip: str) -> str:
+    def _tool_preview(ip) -> str:
         try:
-            obj = orjson.loads(ip)
+            obj = orjson.loads(ip) if isinstance(ip, (str, bytes)) else ip
             if isinstance(obj, dict):
                 for key in ("command", "cmd", "path", "file_path", "query", "prompt", "pattern", "url", "text"):
                     if key in obj and isinstance(obj[key], str):
@@ -1048,6 +1048,7 @@ async def handle_permission_request(params: dict) -> None:
     for cid in access["allowFrom"]:
         info = active_thinking_tasks.get(str(cid))
         if info and isinstance(info, dict):
+            info["override_text"] = bubble_text
             try:
                 await bot.edit_message_text(
                     chat_id=cid,
@@ -1905,10 +1906,12 @@ async def start_thinking(chat_id: str, thread_id: int | None) -> None:
                     break
                 idx = (idx + 1) % len(frames)
                 try:
+                    override = active_thinking_tasks.get(chat_id, {}).get("override_text")
+                    text_to_show = override if override else frames[idx]
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=msg_id,
-                        text=frames[idx],
+                        text=text_to_show,
                         parse_mode="HTML"
                     )
                 except Exception:
