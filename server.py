@@ -45,6 +45,7 @@ from aiogram.types import (
     InputMediaDocument,
     InputMediaPhoto,
     Message,
+    ReactionTypeCustomEmoji,
     ReactionTypeEmoji,
     ReplyParameters,
 )
@@ -568,16 +569,30 @@ TOOLS = [
         "name": "reactions",
         "description": (
             "Поставить emoji-реакцию на сообщение в Telegram. "
-            "Если emoji не передан — выбери сам из списка на основе контекста сообщения: "
-            "👍 ❤ 😭 😂 😡 😄 😁 🔥 👀 🎉 🎊 💯 🙏. "
-            "Telegram принимает только emoji из фиксированного вайтлиста — используй только эти."
+            "Поддерживает два режима:\n"
+            "1. Стандартные emoji (строка): 👍 ❤ 😭 😂 😡 😄 😁 🔥 👀 🎉 🎊 💯 🙏 🤔 😱 — "
+            "только из фиксированного вайтлиста Telegram.\n"
+            "2. Кастомные animated emoji (числовой ID в виде строки) — предпочитай их для выразительности.\n"
+            "Доступные кастомные emoji пак clawd_em (анимированные): "
+            "🤔→5058038712252762170 🔍→5057657362106550145 👋→5055549589726168985 "
+            "🤩→5057887598123419740 👉→5058052902824707746 ⬆️→5057574022561138923 "
+            "🦀→5057764177943201734 💃→5057549442463303394.\n"
+            "Пак DuckEmoji (утята): "
+            "😄→5366316836101038579 😂→5364029976469315203 🤣→5364343006570750091 "
+            "😊→5379732256644405206 😅→5415816441561619011 🥲→5377583454441445203 "
+            "😇→5395689060876426750 ☺️→5379561106492630835.\n"
+            "Пак TranslucentPack (иконки): "
+            "❤️→5278611606756942667 ⭐️→5276111746812112286 ⚠️→5276240711795107620 "
+            "🚫→5278578973595427038 🛡→5276262671962892944 🔓→5278602437001767574 "
+            "🖥→5278647306525108244 📁→5278227821364275264.\n"
+            "Передавай числовой ID как строку в поле emoji для кастомных emoji."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "chat_id": {"type": "string"},
                 "message_id": {"type": "string"},
-                "emoji": {"type": "string", "description": "Emoji для реакции. Если не передан — выбирается автоматически по контексту."},
+                "emoji": {"type": "string", "description": "Emoji для реакции (строка) или числовой custom_emoji_id (строка с цифрами). Если не передан — выбирается автоматически."},
             },
             "required": ["chat_id", "message_id"],
         },
@@ -704,17 +719,19 @@ async def handle_tool_call(msg_id, params: dict) -> None:
             emoji = str(emoji_raw).strip()
             if not emoji:
                 emoji = "👀"
-                
-            log(f"Calling set_message_reaction: chat_id={args['chat_id']}, message_id={args['message_id']}, emoji={emoji}")
+
+            is_custom = emoji.isdigit()
+            reaction_obj = ReactionTypeCustomEmoji(custom_emoji_id=emoji) if is_custom else ReactionTypeEmoji(emoji=emoji)
+            log(f"Calling set_message_reaction: chat_id={args['chat_id']}, message_id={args['message_id']}, emoji={emoji}, custom={is_custom}")
             try:
                 await bot.set_message_reaction(
-                    str(args["chat_id"]), int(args["message_id"]), reaction=[ReactionTypeEmoji(emoji=emoji)]
+                    str(args["chat_id"]), int(args["message_id"]), reaction=[reaction_obj]
                 )
             except TelegramRetryAfter as e:
                 log(f"FloodWait {e.retry_after}s in set_message_reaction, retrying once")
                 await asyncio.sleep(e.retry_after)
                 await bot.set_message_reaction(
-                    str(args["chat_id"]), int(args["message_id"]), reaction=[ReactionTypeEmoji(emoji=emoji)]
+                    str(args["chat_id"]), int(args["message_id"]), reaction=[reaction_obj]
                 )
             stop_thinking(str(args["chat_id"]), session_thread_id)
             result = "reacted"
