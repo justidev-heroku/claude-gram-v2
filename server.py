@@ -3510,6 +3510,18 @@ async def main() -> None:
     await shutdown_evt.wait()
     log("shutting down")
 
+    for cid, info in list(active_thinking_tasks.items()):
+        try:
+            task = info.get("task")
+            if task:
+                task.cancel()
+            msg_id = info.get("msg_id")
+            if msg_id:
+                await bot.delete_message(chat_id=cid, message_id=msg_id)
+        except Exception:
+            pass
+    active_thinking_tasks.clear()
+
     try:
         await dp.stop_polling()
     except Exception:  # noqa: BLE001
