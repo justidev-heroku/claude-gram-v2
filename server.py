@@ -1035,7 +1035,14 @@ async def handle_permission_request(params: dict) -> None:
                         return v[:80] + "…" if len(v) > 80 else v
         except Exception:
             pass
-        s = str(ip or "")
+        # regex-fallback: orjson упал на неправильном экранировании (напр. \" в bash-команде)
+        s = ip if isinstance(ip, str) else (ip.decode("utf-8", errors="replace") if isinstance(ip, bytes) else str(ip or ""))
+        for key in ("command", "cmd", "path", "file_path", "query", "prompt", "pattern", "url", "text"):
+            m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"((?:[^"\\]|\\.)*)"', s)
+            if m:
+                v = m.group(1).replace('\\"', '"').replace('\\\\', '\\').replace('\\n', '\n')
+                v = v.split("\n")[0]
+                return v[:80] + "…" if len(v) > 80 else v
         return s[:80] + "…" if len(s) > 80 else s
 
     tool_preview_str = _tool_preview(input_preview)
