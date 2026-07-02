@@ -732,6 +732,8 @@ async def handle_tool_call(msg_id, params: dict) -> None:
         await respond(msg_id, {"content": [{"type": "text", "text": result}]})
     except Exception as err:  # noqa: BLE001
         log(f"Tool call {name} failed: {err}")
+        if "chat_id" in args:
+            stop_thinking(str(args["chat_id"]), session_thread_id)
         await respond(msg_id, {"content": [{"type": "text", "text": f"{name} failed: {err}"}], "isError": True})
 
 
