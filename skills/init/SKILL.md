@@ -64,7 +64,7 @@ allowlist-политик и групп. Состояние:
    {
      "channelsEnabled": true,
      "allowedChannelPlugins": [
-       { "marketplace": "ripcats-marketplace", "plugin": "telegram" }
+       { "marketplace": "justidev-marketplace", "plugin": "claude-gram" }
      ]
    }
    ```
@@ -77,7 +77,7 @@ allowlist-политик и групп. Состояние:
    > персистентной настройки нет):
    >
    > ```
-   > claude --channels plugin:telegram@ripcats-marketplace
+   > claude --channels plugin:claude-gram@justidev-marketplace
    > ```
    >
    > Затем снова выполни `/telegram:init` для привязки владельца.
