@@ -1020,6 +1020,44 @@ async def handle_permission_request(params: dict) -> None:
     for rid in [k for k, v in pending_permissions.items() if v.get("ts", 0) < cutoff]:
         pending_permissions.pop(rid, None)
 
+    # Вытаскиваем первый значимый аргумент из input_preview для пузыря
+    def _tool_preview(ip: str) -> str:
+        try:
+            obj = orjson.loads(ip)
+            if isinstance(obj, dict):
+                for key in ("command", "cmd", "path", "file_path", "query", "prompt", "pattern", "url", "text"):
+                    if key in obj and isinstance(obj[key], str):
+                        v = obj[key].split("\n")[0]
+                        return v[:80] + "…" if len(v) > 80 else v
+                # fallback: первый строковый аргумент
+                for v in obj.values():
+                    if isinstance(v, str):
+                        return v[:80] + "…" if len(v) > 80 else v
+        except Exception:
+            pass
+        s = str(ip or "")
+        return s[:80] + "…" if len(s) > 80 else s
+
+    tool_preview_str = _tool_preview(input_preview)
+    tool_line = f"\n⚙️ <code>{_esc(tool_name)}</code> »"
+    if tool_preview_str:
+        tool_line += f"\n<code>{_esc(tool_preview_str)}</code>"
+    bubble_text = f'<blockquote><b>{EMOJI_ROBOT} Готовлю ответ...{tool_line}</b></blockquote>'
+
+    # Обновляем пузырь «Готовлю ответ» текущим инструментом
+    for cid in access["allowFrom"]:
+        info = active_thinking_tasks.get(str(cid))
+        if info and isinstance(info, dict):
+            try:
+                await bot.edit_message_text(
+                    chat_id=cid,
+                    message_id=info["msg_id"],
+                    text=bubble_text,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
     if auto_allow:
         await notify("notifications/claude/channel/permission", {"request_id": request_id, "behavior": "allow"})
         return
@@ -1076,6 +1114,7 @@ async def mcp_dispatch(msg: dict) -> None:
 
 
 async def stdin_loop(shutdown_evt: asyncio.Event) -> None:
+    global _mcp_debug
     loop = asyncio.get_running_loop()
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
@@ -1087,6 +1126,12 @@ async def stdin_loop(shutdown_evt: asyncio.Event) -> None:
         line = line.strip()
         if not line:
             continue
+        if _mcp_debug:
+            try:
+                with open(MCP_DEBUG_LOG, "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.datetime.now().isoformat()}] {line.decode()}\n")
+            except Exception:
+                pass
         try:
             msg = orjson.loads(line)
         except orjson.JSONDecodeError:
@@ -1510,6 +1555,42 @@ async def cmd_allows(msg: Message) -> None:
     await msg.answer(text, parse_mode="HTML")
 
 
+@dp.message(Command("mcp_debug"))
+async def cmd_mcp_debug(msg: Message) -> None:
+    global _mcp_debug
+    gated = dm_command_gate(msg)
+    if not gated:
+        return
+    _mcp_debug = not _mcp_debug
+    if _mcp_debug:
+        try:
+            MCP_DEBUG_LOG.unlink(missing_ok=True)
+        except Exception:
+            pass
+        await msg.answer(
+            f"<b>{EMOJI_SUCCESS} MCP debug включён</b>\n"
+            f"<blockquote>Все входящие MCP-сообщения пишутся в <code>{MCP_DEBUG_LOG}</code>.\n"
+            f"Повтори <code>/mcp_debug</code> чтобы выключить и получить лог.</blockquote>",
+            parse_mode="HTML"
+        )
+    else:
+        lines = []
+        try:
+            if MCP_DEBUG_LOG.exists():
+                all_lines = MCP_DEBUG_LOG.read_text("utf-8").splitlines()
+                lines = all_lines[-30:]
+        except Exception:
+            pass
+        text = "\n".join(lines) if lines else "(лог пуст)"
+        if len(text) > 3500:
+            text = "…\n" + text[-3500:]
+        await msg.answer(
+            f"<b>{EMOJI_WARNING} MCP debug выключен</b>\n\n"
+            f"<b>Последние строки лога:</b>\n<pre><code>{_esc(text)}</code></pre>",
+            parse_mode="HTML"
+        )
+
+
 @dp.message(Command("check_update"))
 async def cmd_check_update(msg: Message) -> None:
     gated = dm_command_gate(msg)
@@ -1783,6 +1864,8 @@ EMOJI_LOCK = '<tg-emoji emoji-id="6037249452824072506">🔒</tg-emoji>'
 EMOJI_WARNING = '<tg-emoji emoji-id="5255949705740843980">⚠️</tg-emoji>'
 
 active_thinking_tasks = {}
+_mcp_debug = False
+MCP_DEBUG_LOG = Path("/tmp/mcp_debug.log")
 
 
 async def start_thinking(chat_id: str, thread_id: int | None) -> None:
@@ -1802,9 +1885,23 @@ async def start_thinking(chat_id: str, thread_id: int | None) -> None:
                 f'<blockquote><b>{EMOJI_ROBOT} Готовлю ответ...</b></blockquote>'
             ]
             idx = 0
+            start_time = asyncio.get_event_loop().time()
+            MAX_THINKING_SECS = 600  # 10 минут
             while chat_id in active_thinking_tasks and active_thinking_tasks[chat_id]["msg_id"] == msg_id:
                 await asyncio.sleep(2.0)
                 if chat_id not in active_thinking_tasks or active_thinking_tasks[chat_id]["msg_id"] != msg_id:
+                    break
+                if asyncio.get_event_loop().time() - start_time > MAX_THINKING_SECS:
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=msg_id,
+                            text=f'<blockquote>{EMOJI_WARNING} <b>Claude Code не отвечает</b>\nВозможно, лимит исчерпан или процесс завис.</blockquote>',
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+                    active_thinking_tasks.pop(chat_id, None)
                     break
                 idx = (idx + 1) % len(frames)
                 try:
@@ -3258,6 +3355,7 @@ async def main() -> None:
                 BotCommand(command="model", description="Сменить модель Claude Code"),
                 BotCommand(command="effort", description="Настроить уровень effort"),
                 BotCommand(command="check_update", description="Проверить наличие обновлений"),
+                BotCommand(command="mcp_debug", description="Включить/выключить лог входящих MCP-сообщений"),
             ],
             scope=BotCommandScopeAllPrivateChats(),
         )
