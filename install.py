@@ -301,7 +301,7 @@ def main():
         pass
 
     # Умная установка пакетов с поддержкой --break-system-packages
-    packages = ["aiogram", "orjson", "curl_cffi", "playwright"]
+    packages = ["aiogram", "orjson", "aiohttp", "curl_cffi", "playwright"]
     installed = False
     
     try:
@@ -631,6 +631,12 @@ def main() -> int:
                 elif "5-hour limit" in lower_buf or "5-hour budget" in lower_buf or "5-hour window" in lower_buf:
                     if (now - process_start_time > 8.0) or ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf):
                         matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
+                elif "hit your session limit" in lower_buf or ("session limit" in lower_buf and "resets" in lower_buf):
+                    reset_time = ""
+                    m = re.search(r"resets\s+([^\n·•]+)", pty_buffer, re.IGNORECASE)
+                    if m:
+                        reset_time = f" Сброс: <b>{m.group(1).strip()}</b>."
+                    matched_alert = f"⏳ <b>Claude Code: Достигнут лимит сессии.</b>{reset_time} Бот перезапустится автоматически."
                 elif "invalid authentication credentials" in lower_buf or "api error: 401" in lower_buf or "please run /login" in lower_buf:
                     matched_alert = "⚠️ <b>Сессия устарела или недействительна.</b> Пожалуйста, выполните повторную авторизацию с помощью команды /login."
                     auth_failed = True
@@ -656,10 +662,11 @@ def main() -> int:
                         except Exception:
                             pass
                         sys.exit(1)
-                    for keyword in ["ratelimiterror", "rate limit reached", "rate limit exceeded", 
-                                    "overloadederror", "overloaded", "billing limit", 
+                    for keyword in ["ratelimiterror", "rate limit reached", "rate limit exceeded",
+                                    "overloadederror", "overloaded", "billing limit",
                                     "credit balance too low", "insufficient credit", "insufficient funds",
                                     "weekly limit", "weekly budget", "5-hour limit", "5-hour budget", "5-hour window",
+                                    "hit your session limit", "session limit",
                                     "invalid authentication credentials", "api error: 401", "please run /login"]:
                         pty_buffer = re.sub(re.escape(keyword), f"[processed_{keyword}]", pty_buffer, flags=re.IGNORECASE)
 

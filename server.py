@@ -20,6 +20,8 @@ import sys
 import time
 from pathlib import Path
 
+import aiohttp
+
 from aiogram.utils.text_decorations import html_decoration
 
 try:
@@ -2821,11 +2823,49 @@ async def on_resume_callback(cb: CallbackQuery) -> None:
         return
 
 
-MONTH_MAP = {
-    "jan": "01", "feb": "02", "mar": "03", "apr": "04",
-    "may": "05", "jun": "06", "jul": "07", "aug": "08",
-    "sep": "09", "oct": "10", "nov": "11", "dec": "12"
+MSK_TZ = datetime.timezone(datetime.timedelta(hours=3))
+
+RU_MONTHS = {
+    "Jan": "янв", "Feb": "фев", "Mar": "мар", "Apr": "апр",
+    "May": "май", "Jun": "июн", "Jul": "июл", "Aug": "авг",
+    "Sep": "сен", "Oct": "окт", "Nov": "ноя", "Dec": "дек"
 }
+
+USAGE_KIND_LABEL = {
+    "session": "Сессия (5ч)",
+    "weekly_all": "Неделя (все модели)",
+    "weekly_scoped": "Неделя (модель)",
+}
+
+
+def _usage_bar(utilization: float, width: int = 10) -> str:
+    utilization = max(0.0, min(1.0, utilization))
+    filled = max(0, min(width, round(utilization * width)))
+    bar = "█" * filled + "░" * (width - filled)
+    return f"{bar} {utilization * 100:.0f}%"
+
+
+def _format_msk(ts) -> str:
+    if not ts:
+        return "—"
+    dt = datetime.datetime.fromisoformat(ts) if isinstance(ts, str) else datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+    dt_msk = dt.astimezone(MSK_TZ)
+    months_en = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    ru_mon = RU_MONTHS.get(months_en[dt_msk.month - 1], "")
+    return f"{dt_msk.day} {ru_mon}, {dt_msk.strftime('%H:%M')} МСК"
+
+
+async def fetch_usage_data() -> dict:
+    creds = orjson.loads(Path("/root/.claude/.credentials.json").read_bytes())
+    token = creds["claudeAiOauth"]["accessToken"]
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession(headers=headers) as session:
+        async with session.get(
+            "https://api.anthropic.com/api/oauth/usage",
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            resp.raise_for_status()
+            return orjson.loads(await resp.read())
 
 
 @dp.message(Command("usage"))
@@ -2842,139 +2882,106 @@ async def cmd_usage(msg: Message) -> None:
     progress_msg = await msg.answer(f"<b>{EMOJI_REFRESH} Запрашиваю лимиты использования...</b>", parse_mode="HTML")
 
     try:
-        env = dict(os.environ)
-        env["CLAUDE_ALLOW_ROOT"] = "1"
-        env["HOME"] = "/root"
-        
-        process = await asyncio.create_subprocess_exec(
-            "claude",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env
-        )
-        
-        try:
-            stdout_bytes, _ = await asyncio.wait_for(
-                process.communicate(input=b"/usage\n"), timeout=30
-            )
-        except asyncio.TimeoutError:
-            try:
-                process.kill()
-            except Exception:
-                pass
-            await progress_msg.edit_text("❌ Таймаут: Claude Code не ответил за 30 секунд.", parse_mode="HTML")
-            return
-        stdout = stdout_bytes.decode("utf-8", errors="ignore")
-        
-        session_match = re.search(r"Current session:\s*(\d+)%\s*used\s*·\s*resets\s*([^\n\r]+)", stdout)
-        week_match = re.search(r"Current week(?:\s*\(all models\))?:\s*(\d+)%\s*used\s*·\s*resets\s*([^\n\r]+)", stdout)
-        
-        if not session_match or not week_match:
-            # Check for Rate Limit message
-            if "rate limited" in stdout.lower():
-                await progress_msg.edit_text("⚠️ <b>Лимиты временно недоступны</b> (превышен лимит запросов к API). Пожалуйста, попробуйте позже.", parse_mode="HTML")
-                return
-
-            if "usage limit" in stdout.lower() or "limit reached" in stdout.lower() or "exceeded" in stdout.lower():
-                lines = [l.strip() for l in stdout.splitlines() if l.strip()]
-                detail = " ".join(lines[:2]) if lines else "Лимиты исчерпаны."
-                await progress_msg.edit_text(
-                    f"🚫 <b>Лимит Claude Code исчерпан</b>\n<blockquote>{_esc(detail)}</blockquote>",
-                    parse_mode="HTML"
-                )
-                return
-
-            # Check if this is a subscription-based account
-            if "subscription" in stdout.lower() or "last 24h" in stdout.lower():
-                last_24h_match = re.search(r"Last 24h\s*·\s*(\d+)\s*requests?\s*·\s*(\d+)\s*sessions?", stdout, re.IGNORECASE)
-                contrib_match = re.search(r"(\d+)%\s*of your usage came from\s*([^\n\r]+)", stdout, re.IGNORECASE)
-                
-                response_lines = [
-                    "✨ <b>Подписка Claude Code активна</b>",
-                    "├ Вы используете персональную подписку для работы с Claude Code."
-                ]
-                if last_24h_match:
-                    reqs = last_24h_match.group(1)
-                    sess = last_24h_match.group(2)
-                    response_lines.append(f"├ Активность за 24ч: <b>{reqs}</b> запросов, <b>{sess}</b> сессий")
-                if contrib_match:
-                    pct = contrib_match.group(1)
-                    source = contrib_match.group(2).strip()
-                    response_lines.append(f"└ {pct}% запросов пришлось на: <i>{source}</i>")
-                else:
-                    clean_lines = [l.strip() for l in stdout.splitlines() if l.strip()]
-                    if clean_lines:
-                        # Grab the last line as details
-                        response_lines.append(f"└ <i>{clean_lines[-1]}</i>")
-                        
-                await progress_msg.edit_text("\n".join(response_lines), parse_mode="HTML")
-                return
-
-            lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-            fallback_text = "\n".join(lines[:5])
-            await progress_msg.edit_text(f"⚠️ Не удалось распарсить лимиты. Ответ Claude:\n\n<code>{fallback_text}</code>", parse_mode="HTML")
-            return
-            
-        RU_MONTHS = {
-            "Jan": "янв", "Feb": "фев", "Mar": "мар", "Apr": "апр",
-            "May": "май", "Jun": "июн", "Jul": "июл", "Aug": "авг",
-            "Sep": "сен", "Oct": "окт", "Nov": "ноя", "Dec": "дек"
-        }
-        
-        now = datetime.datetime.now(datetime.timezone.utc)
-        
-        def parse_date(date_str):
-            date_str_clean = re.sub(r'\([^)]*\)', '', date_str).strip()
-            if ":" not in date_str_clean:
-                date_str_clean = date_str_clean.replace("am", ":00am").replace("pm", ":00pm")
-            
-            parts = date_str_clean.split(None, 2)
-            if len(parts) >= 2:
-                month_name = parts[0].lower()[:3]
-                if month_name in MONTH_MAP:
-                    date_str_clean = f"{MONTH_MAP[month_name]} " + " ".join(parts[1:])
-                    
-            date_str_with_year = f"{date_str_clean} {now.year}"
-            dt = datetime.datetime.strptime(date_str_with_year, "%m %d, %I:%M%p %Y")
-            dt = dt.replace(tzinfo=datetime.timezone.utc)
-            if dt < now - datetime.timedelta(days=1):
-                dt = dt.replace(year=now.year + 1)
-            return dt
-            
-        def format_ru_date(dt):
-            months_en = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-            mon_en = months_en[dt.month - 1]
-            ru_mon = RU_MONTHS.get(mon_en, mon_en.lower())
-            return f"{dt.day} {ru_mon}, {dt.strftime('%H:%M')} UTC"
-            
-        sess_pct = session_match.group(1)
-        sess_reset_str = session_match.group(2)
-        week_pct = week_match.group(1)
-        week_reset_str = week_match.group(2)
-        
-        sess_dt = parse_date(sess_reset_str)
-        week_dt = parse_date(week_reset_str)
-        
-        sess_diff = sess_dt - now
-        sess_diff_sec = sess_diff.total_seconds()
-        if sess_diff_sec < 0:
-            sess_time = "уже сбросился"
-        elif sess_diff_sec < 3600:
-            sess_time = f"~{int(sess_diff_sec / 60)}м"
+        data = await fetch_usage_data()
+    except aiohttp.ClientResponseError as e:
+        if e.status == 429:
+            await progress_msg.edit_text("⚠️ <b>Лимиты временно недоступны</b> (превышен лимит запросов к API). Пожалуйста, попробуйте позже.", parse_mode="HTML")
         else:
-            sess_time = f"~{round(sess_diff_sec / 3600)}ч"
-            
-        response_lines = [
-            f"<b>Лимиты использования Claude Code:</b>",
-            f"├ Сессия: {sess_pct}% · сброс через {sess_time} ({format_ru_date(sess_dt)})",
-            f"└ Неделя: {week_pct}% · сброс {format_ru_date(week_dt)}"
-        ]
-        
-        await progress_msg.edit_text("\n".join(response_lines), parse_mode="HTML")
-        
+            await progress_msg.edit_text(f"❌ Ошибка {e.status} при получении лимитов.", parse_mode="HTML")
+        return
     except Exception as e:
-        await progress_msg.edit_text(f"❌ Ошибка при получении лимитов: {e}")
+        await progress_msg.edit_text(f"❌ Ошибка при получении лимитов: {_esc(str(e))}", parse_mode="HTML")
+        return
+
+    limits = data.get("limits") or []
+    if not limits:
+        await progress_msg.edit_text("ℹ️ Лимиты не найдены (возможно, безлимитный тариф).", parse_mode="HTML")
+        return
+
+    lines = ["<b>📊 Лимиты использования Claude Code</b>"]
+    for lim in limits:
+        kind = lim.get("kind", "")
+        pct = (lim.get("percent") or 0) / 100
+        reset = lim.get("resets_at")
+        model = ((lim.get("scope") or {}).get("model") or {}).get("display_name", "")
+        is_active = lim.get("is_active", False)
+        label = USAGE_KIND_LABEL.get(kind, kind)
+        if model:
+            label = f"{label} · {model}"
+        marker = "🔴" if is_active else "⚪️"
+        lines.append(f"{marker} <b>{_esc(label)}</b>")
+        lines.append(f"<code>{_usage_bar(pct)}</code> · сброс {_format_msk(reset)}")
+
+    spend = data.get("spend") or {}
+    extra = data.get("extra_usage") or {}
+    if spend.get("enabled") and (used := spend.get("used")):
+        amt = used["amount_minor"] / 10 ** used.get("exponent", 2)
+        lines.append(f"💳 Кредиты: <b>{amt:.2f} {used['currency']}</b>")
+    if extra.get("is_enabled"):
+        eu = extra.get("utilization")
+        lines.append(f"➕ Extra usage: <b>{eu:.1f}%</b>" if eu is not None else "➕ Extra usage: включено")
+
+    await progress_msg.edit_text("\n".join(lines), parse_mode="HTML")
+
+
+USAGE_WATCH_THRESHOLD = 0.9
+USAGE_WATCH_INTERVAL = 300
+_usage_alerted_kinds: set[str] = set()
+
+
+async def usage_watch_loop(shutdown_evt: asyncio.Event, bot: Bot) -> None:
+    try:
+        await asyncio.sleep(60)
+    except asyncio.CancelledError:
+        return
+
+    while not shutdown_evt.is_set():
+        try:
+            if not Path("/root/.claude/.credentials.json").exists():
+                pass
+            else:
+                data = await fetch_usage_data()
+                limits = data.get("limits") or []
+                access = load_access()
+                chat_id = access["allowFrom"][0] if access and access.get("allowFrom") else None
+
+                seen_kinds = set()
+                for lim in limits:
+                    kind = lim.get("kind", "")
+                    seen_kinds.add(kind)
+                    pct = (lim.get("percent") or 0) / 100
+
+                    if pct >= USAGE_WATCH_THRESHOLD:
+                        if kind not in _usage_alerted_kinds and chat_id:
+                            label = USAGE_KIND_LABEL.get(kind, kind)
+                            reset = _format_msk(lim.get("resets_at"))
+                            try:
+                                await bot.send_message(
+                                    chat_id,
+                                    f"⏳ <b>Claude Code: лимит «{_esc(label)}» почти исчерпан.</b>\n"
+                                    f"<code>{_usage_bar(pct)}</code> · сброс {reset}",
+                                    parse_mode="HTML",
+                                )
+                            except Exception:
+                                pass
+                            _usage_alerted_kinds.add(kind)
+                    else:
+                        _usage_alerted_kinds.discard(kind)
+
+                for kind in list(_usage_alerted_kinds):
+                    if kind not in seen_kinds:
+                        _usage_alerted_kinds.discard(kind)
+        except Exception as e:
+            log(f"Usage-watch cycle error: {e}")
+
+        try:
+            await asyncio.wait_for(shutdown_evt.wait(), timeout=USAGE_WATCH_INTERVAL)
+            break
+        except asyncio.TimeoutError:
+            pass
+        except asyncio.CancelledError:
+            break
+
 
 @dp.message(Command("logout"))
 async def cmd_logout(msg: Message) -> None:
@@ -3506,6 +3513,7 @@ async def main() -> None:
     polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
     topic_task = asyncio.create_task(delayed_topic())
     update_task = asyncio.create_task(auto_update_loop(shutdown_evt, bot))
+    usage_watch_task = asyncio.create_task(usage_watch_loop(shutdown_evt, bot))
 
     await shutdown_evt.wait()
     log("shutting down")
