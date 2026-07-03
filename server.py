@@ -108,22 +108,23 @@ def is_bot_process(pid: int) -> bool:
 
 # Telegram разрешает только один getUpdates-потребитель на токен.
 # Завершаем зависший процесс предыдущей сессии перед стартом поллинга.
-STATE_DIR.mkdir(parents=True, exist_ok=True)
-try:
-    os.chmod(STATE_DIR, 0o700)
-except OSError:
-    pass
-try:
-    stale = int(PID_FILE.read_text())
-    if stale > 1 and stale != os.getpid():
-        if is_bot_process(stale):
-            log(f"replacing stale poller pid={stale}")
-            os.kill(stale, 15)
-        else:
-            log(f"PID file contains process pid={stale} but it is not a bot process. Skipping kill.")
-except (OSError, ValueError):
-    pass
-PID_FILE.write_text(str(os.getpid()))
+if os.environ.get("CLAUDE_TELEGRAM_BACKGROUND") == "1":
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(STATE_DIR, 0o700)
+    except OSError:
+        pass
+    try:
+        stale = int(PID_FILE.read_text())
+        if stale > 1 and stale != os.getpid():
+            if is_bot_process(stale):
+                log(f"replacing stale poller pid={stale}")
+                os.kill(stale, 15)
+            else:
+                log(f"PID file contains process pid={stale} but it is not a bot process. Skipping kill.")
+    except (OSError, ValueError):
+        pass
+    PID_FILE.write_text(str(os.getpid()))
 
 PERMISSION_REPLY_RE = re.compile(r"^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$", re.IGNORECASE)
 # Всё похожее на слэш-команду (даже незарегистрированную) не передаётся Клоду как сообщение.
@@ -3369,34 +3370,35 @@ def cleanup_inbox() -> None:
 
 async def main() -> None:
     global bot_username
-    cleanup_inbox()
 
-    me = await bot.get_me()
-    bot_username = me.username or ""
-    log(f"polling as @{bot_username}")
-    try:
-        await bot.set_my_commands(
-            [
-                BotCommand(command="start", description="Показать Telegram ID"),
-                BotCommand(command="close", description="Закрыть тред и очистить историю"),
-                BotCommand(command="auto", description="Авто-разрешение запросов вкл/выкл"),
-                BotCommand(command="accounts", description="Список аккаунтов Claude Code"),
-                BotCommand(command="login", description="Привязать новый аккаунт Claude Code"),
-                BotCommand(command="save_account", description="Сохранить текущий аккаунт под именем"),
-                BotCommand(command="switch_account", description="Переключить аккаунт Claude Code"),
-                BotCommand(command="delete_account", description="Удалить сохраненный аккаунт Claude Code"),
-                BotCommand(command="logout", description="Выйти из текущего аккаунта Claude Code"),
-                BotCommand(command="usage", description="Проверить лимиты использования Claude Code"),
-                BotCommand(command="resume", description="Выбрать сессию для продолжения диалога"),
-                BotCommand(command="model", description="Сменить модель Claude Code"),
-                BotCommand(command="effort", description="Настроить уровень effort"),
-                BotCommand(command="check_update", description="Проверить наличие обновлений"),
-                BotCommand(command="mcp_debug", description="Включить/выключить лог входящих MCP-сообщений"),
-            ],
-            scope=BotCommandScopeAllPrivateChats(),
-        )
-    except Exception:  # noqa: BLE001
-        pass
+    if os.environ.get("CLAUDE_TELEGRAM_BACKGROUND") == "1":
+        cleanup_inbox()
+        try:
+            me = await bot.get_me()
+            bot_username = me.username or ""
+            log(f"polling as @{bot_username}")
+            await bot.set_my_commands(
+                [
+                    BotCommand(command="start", description="Показать Telegram ID"),
+                    BotCommand(command="close", description="Закрыть тред и очистить историю"),
+                    BotCommand(command="auto", description="Авто-разрешение запросов вкл/выкл"),
+                    BotCommand(command="accounts", description="Список аккаунтов Claude Code"),
+                    BotCommand(command="login", description="Привязать новый аккаунт Claude Code"),
+                    BotCommand(command="save_account", description="Сохранить текущий аккаунт под именем"),
+                    BotCommand(command="switch_account", description="Переключить аккаунт Claude Code"),
+                    BotCommand(command="delete_account", description="Удалить сохраненный аккаунт Claude Code"),
+                    BotCommand(command="logout", description="Выйти из текущего аккаунта Claude Code"),
+                    BotCommand(command="usage", description="Проверить лимиты использования Claude Code"),
+                    BotCommand(command="resume", description="Выбрать сессию для продолжения диалога"),
+                    BotCommand(command="model", description="Сменить модель Claude Code"),
+                    BotCommand(command="effort", description="Настроить уровень effort"),
+                    BotCommand(command="check_update", description="Проверить наличие обновлений"),
+                    BotCommand(command="mcp_debug", description="Включить/выключить лог входящих MCP-сообщений"),
+                ],
+                scope=BotCommandScopeAllPrivateChats(),
+            )
+        except Exception as e:  # noqa: BLE001
+            log(f"bot setup failed: {e}")
 
     shutdown_evt = asyncio.Event()
 
@@ -3510,10 +3512,17 @@ async def main() -> None:
                     pass
 
     stdin_task = asyncio.create_task(stdin_loop(shutdown_evt))
-    polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
-    topic_task = asyncio.create_task(delayed_topic())
-    update_task = asyncio.create_task(auto_update_loop(shutdown_evt, bot))
-    usage_watch_task = asyncio.create_task(usage_watch_loop(shutdown_evt, bot))
+    
+    polling_task = None
+    topic_task = None
+    update_task = None
+    usage_watch_task = None
+
+    if os.environ.get("CLAUDE_TELEGRAM_BACKGROUND") == "1":
+        polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+        topic_task = asyncio.create_task(delayed_topic())
+        update_task = asyncio.create_task(auto_update_loop(shutdown_evt, bot))
+        usage_watch_task = asyncio.create_task(usage_watch_loop(shutdown_evt, bot))
 
     await shutdown_evt.wait()
     log("shutting down")
@@ -3530,18 +3539,32 @@ async def main() -> None:
             pass
     active_thinking_tasks.clear()
 
-    try:
-        await dp.stop_polling()
-    except Exception:  # noqa: BLE001
-        pass
-    for t in (polling_task, stdin_task, topic_task, update_task):
+    if polling_task:
+        try:
+            await dp.stop_polling()
+        except Exception:  # noqa: BLE001
+            pass
+
+    tasks_to_cancel = [stdin_task]
+    if polling_task:
+        tasks_to_cancel.append(polling_task)
+    if topic_task:
+        tasks_to_cancel.append(topic_task)
+    if update_task:
+        tasks_to_cancel.append(update_task)
+    if usage_watch_task:
+        tasks_to_cancel.append(usage_watch_task)
+
+    for t in tasks_to_cancel:
         t.cancel()
-    await asyncio.gather(polling_task, stdin_task, topic_task, update_task, return_exceptions=True)
-    try:
-        if PID_FILE.read_text().strip() == str(os.getpid()):
-            PID_FILE.unlink()
-    except (OSError, ValueError):
-        pass
+    await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+    if os.environ.get("CLAUDE_TELEGRAM_BACKGROUND") == "1":
+        try:
+            if PID_FILE.read_text().strip() == str(os.getpid()):
+                PID_FILE.unlink()
+        except (OSError, ValueError):
+            pass
     try:
         await bot.session.close()
     except Exception:  # noqa: BLE001
@@ -3554,8 +3577,9 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        try:
-            if PID_FILE.read_text().strip() == str(os.getpid()):
-                PID_FILE.unlink()
-        except (OSError, ValueError):
-            pass
+        if os.environ.get("CLAUDE_TELEGRAM_BACKGROUND") == "1":
+            try:
+                if PID_FILE.read_text().strip() == str(os.getpid()):
+                    PID_FILE.unlink()
+            except (OSError, ValueError):
+                pass

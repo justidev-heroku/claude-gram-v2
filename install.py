@@ -274,20 +274,58 @@ def main():
     stop_mascot_animation()
     print_claudgramik()  # статичный маскот остаётся на экране
     
-    # 1. Интерактивный опрос
+    # 1. Интерактивный опрос / Автоопределение
     print(f"{CLR_CYAN}[1/5] Настройка Telegram конфигурации:{CLR_RESET}")
     
-    while True:
-        bot_token = input(f"🔑 {CLR_YELLOW}Введите Telegram Bot Token:{CLR_RESET} ").strip()
-        if re.match(r"^[0-9]+:[a-zA-Z0-9_-]+$", bot_token):
-            break
-        print(f"{CLR_RED}❌ Неверный формат токена! Пример: 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ{CLR_RESET}")
+    HOME_DIR = Path.home()
+    STATE_DIR = HOME_DIR / ".claude" / "channels" / "telegram"
+    existing_token = None
+    existing_owner = None
+    
+    # Пытаемся прочитать существующие настройки
+    try:
+        import json
+        env_file = STATE_DIR / ".env"
+        if env_file.exists():
+            for line in env_file.read_text("utf-8").splitlines():
+                if line.startswith("TELEGRAM_BOT_TOKEN="):
+                    t = line.split("=", 1)[1].strip()
+                    if re.match(r"^[0-9]+:[a-zA-Z0-9_-]+$", t):
+                        existing_token = t
+                        break
+    except Exception:
+        pass
+        
+    try:
+        import json
+        access_file = STATE_DIR / "access.json"
+        if access_file.exists():
+            data = json.loads(access_file.read_text("utf-8"))
+            if data.get("allowFrom") and isinstance(data["allowFrom"], list) and len(data["allowFrom"]) > 0:
+                o = str(data["allowFrom"][0]).strip()
+                if re.match(r"^[0-9]+$", o):
+                    existing_owner = o
+    except Exception:
+        pass
 
-    while True:
-        owner_id = input(f"👤 {CLR_YELLOW}Введите Ваш Telegram ID (только цифры):{CLR_RESET} ").strip()
-        if re.match(r"^[0-9]+$", owner_id):
-            break
-        print(f"{CLR_RED}❌ ID должен состоять только из цифр!{CLR_RESET}")
+    if existing_token and existing_owner:
+        print(f"{CLR_GREEN}✅ Найдена существующая конфигурация!{CLR_RESET}")
+        print(f"  🔑 Токен: {CLR_YELLOW}{existing_token[:6]}...{existing_token[-6:]}{CLR_RESET}")
+        print(f"  👤 ID владельца: {CLR_YELLOW}{existing_owner}{CLR_RESET}")
+        bot_token = existing_token
+        owner_id = existing_owner
+    else:
+        while True:
+            bot_token = input(f"🔑 {CLR_YELLOW}Введите Telegram Bot Token:{CLR_RESET} ").strip()
+            if re.match(r"^[0-9]+:[a-zA-Z0-9_-]+$", bot_token):
+                break
+            print(f"{CLR_RED}❌ Неверный формат токена! Пример: 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ{CLR_RESET}")
+
+        while True:
+            owner_id = input(f"👤 {CLR_YELLOW}Введите Ваш Telegram ID (только цифры):{CLR_RESET} ").strip()
+            if re.match(r"^[0-9]+$", owner_id):
+                break
+            print(f"{CLR_RED}❌ ID должен состоять только из цифр!{CLR_RESET}")
         
     print()
 
@@ -471,6 +509,7 @@ def delete_thinking_message() -> None:
         sys.stderr.write(f"Failed to delete thinking message: {e}\n")
 
 def main() -> int:
+    os.environ["CLAUDE_TELEGRAM_BACKGROUND"] = "1"
     cli = get_active_cli()
     if cli == "agy" or not Path("##HOME##/.claude/.credentials.json").exists():
         sys.stderr.write("No active credentials found. Running server.py standalone...\n")
