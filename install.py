@@ -753,6 +753,29 @@ if __name__ == "__main__":
     marketplace_dir = HOME_DIR / "justidev-marketplace"
     try:
         marketplace_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Создаем манифест маркетплейса .claude-plugin/marketplace.json
+        import json
+        m_meta_dir = marketplace_dir / ".claude-plugin"
+        m_meta_dir.mkdir(parents=True, exist_ok=True)
+        m_json_path = m_meta_dir / "marketplace.json"
+        m_json_data = {
+            "name": "justidev-marketplace",
+            "owner": {
+                "name": "justidev",
+                "url": "https://t.me/justidev"
+            },
+            "plugins": [
+                {
+                    "name": "claude-gram",
+                    "source": "claude-gram",
+                    "description": "Self-hosted Telegram channel bridge for Claude Code — text, files, photos, HTML formatting, multi-account, auto-updates."
+                }
+            ]
+        }
+        m_json_path.write_text(json.dumps(m_json_data, indent=2), encoding="utf-8")
+        print(f"{CLR_GREEN}✅ Манифест маркетплейса создан: {m_json_path}{CLR_RESET}")
+
         plugin_link = marketplace_dir / "claude-gram"
         
         # Если ссылка или папка уже есть, удалим её перед созданием
@@ -772,11 +795,11 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"{CLR_RED}⚠️ Не удалось настроить локальный маркетплейс: {e}{CLR_RESET}")
 
-    # Создаем папку кэша плагина и символическую ссылку на версию
-    cache_plugin_dir = HOME_DIR / ".claude" / "plugins" / "cache" / "justidev-marketplace" / "claude-gram"
+    # Создаем папку маркетплейсов плагина и символическую ссылку
+    marketplaces_dir = HOME_DIR / ".claude" / "plugins" / "marketplaces"
     try:
-        cache_plugin_dir.mkdir(parents=True, exist_ok=True)
-        version_link = cache_plugin_dir / "2.0.0"
+        marketplaces_dir.mkdir(parents=True, exist_ok=True)
+        version_link = marketplaces_dir / "justidev-marketplace"
         
         if version_link.exists() or version_link.is_symlink():
             if version_link.is_symlink():
@@ -790,9 +813,9 @@ if __name__ == "__main__":
             version_link.symlink_to(INSTALL_DIR)
         else:
             os.symlink(INSTALL_DIR, version_link, target_is_directory=True)
-        print(f"{CLR_GREEN}✅ Символическая ссылка в кэше Claude Code создана: {version_link} -> {INSTALL_DIR}{CLR_RESET}")
+        print(f"{CLR_GREEN}✅ Символическая ссылка в маркетплейсах Claude Code создана: {version_link} -> {INSTALL_DIR}{CLR_RESET}")
     except Exception as e:
-        print(f"{CLR_RED}⚠️ Не удалось настроить кэш плагина: {e}{CLR_RESET}")
+        print(f"{CLR_RED}⚠️ Не удалось настроить маркетплейс плагина: {e}{CLR_RESET}")
 
     try:
         import json
@@ -849,7 +872,7 @@ if __name__ == "__main__":
         installed_data["plugins"]["claude-gram@justidev-marketplace"] = [
             {
                 "scope": "user",
-                "installPath": str(HOME_DIR / ".claude" / "plugins" / "cache" / "justidev-marketplace" / "claude-gram" / "2.0.0"),
+                "installPath": str(HOME_DIR / ".claude" / "plugins" / "marketplaces" / "justidev-marketplace"),
                 "version": "2.0.0",
                 "installedAt": "2026-06-30T08:00:00.000Z",
                 "lastUpdated": "2026-06-30T08:00:00.000Z"
@@ -909,8 +932,8 @@ if __name__ == "__main__":
             local_data["permissions"]["allow"] = []
             
         required_perms = [
-            "mcp__claude-gram__telegram-reply",
-            "mcp__claude-gram__*"
+            "mcp__claude-gram@justidev-marketplace__telegram-reply",
+            "mcp__claude-gram@justidev-marketplace__*"
         ]
         modified = False
         for perm in required_perms:
