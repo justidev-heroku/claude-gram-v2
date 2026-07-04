@@ -664,12 +664,16 @@ def main() -> int:
                     matched_alert = "⚠️ <b>Claude Code: Достигнут лимит оплаты (Billing Limit).</b>"
                 elif "credit balance too low" in lower_buf or "insufficient credit" in lower_buf or "insufficient funds" in lower_buf:
                     matched_alert = "⚠️ <b>Claude Code: Недостаточно средств на балансе API.</b>"
-                elif "weekly limit" in lower_buf or "weekly budget" in lower_buf:
-                    if (now - process_start_time > 8.0) or ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf):
-                        matched_alert = "⚠️ <b>Claude Code: Достигнут недельный лимит использования.</b>"
-                elif "5-hour limit" in lower_buf or "5-hour budget" in lower_buf or "5-hour window" in lower_buf:
-                    if (now - process_start_time > 8.0) or ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf):
-                        matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
+                elif ("reached your weekly limit" in lower_buf or "weekly limit reached" in lower_buf or "weekly budget exceeded" in lower_buf or
+                      (("weekly limit" in lower_buf or "weekly budget" in lower_buf) and
+                       ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf))) and not (
+                      ("plan's weekly usage limit" in lower_buf or "weekly usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf)):
+                    matched_alert = "⚠️ <b>Claude Code: Достигнут недельный лимит использования.</b>"
+                elif ("reached your 5-hour limit" in lower_buf or "5-hour limit reached" in lower_buf or "5-hour budget exceeded" in lower_buf or
+                      (("5-hour limit" in lower_buf or "5-hour budget" in lower_buf or "5-hour window" in lower_buf) and
+                       ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf))) and not (
+                      ("plan's 5-hour usage limit" in lower_buf or "5-hour usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf)):
+                    matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
                 elif "hit your session limit" in lower_buf or ("session limit" in lower_buf and "resets" in lower_buf):
                     reset_time = ""
                     m = re.search(r"resets\s+([^\n·•]+)", pty_buffer, re.IGNORECASE)
