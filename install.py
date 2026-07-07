@@ -466,6 +466,85 @@ def should_fork_session(model_val: str, last_model: str) -> bool:
         return False
     return model_val != last_model
 
+def build_session_args(active_id: str, model_val: str, last_model: str, new_uuid: str):
+    # Decide session-related CLI args. Pure, for testability.
+    # Returns (args_list, persist_id, fork_for_model_change):
+    #   - no active session -> start fresh with --session-id, persist the new uuid
+    #   - active session, model unchanged -> --resume, keep file as-is
+    #   - active session, model changed -> --resume --fork-session (claude mints a
+    #     new id which the resume-hint capture will persist), keep file as-is
+    if not active_id:
+        return (["--session-id", new_uuid], new_uuid, False)
+    if should_fork_session(model_val, last_model):
+        return (["--resume", active_id, "--fork-session"], "", True)
+    return (["--resume", active_id], "", False)
+
+def classify_pty_alert(pty_buffer: str):
+    # Classify an error surfaced in Claude's PTY output. Pure, for testability.
+    # Returns (matched_alert, kill_after_alert, is_auth, no_conversation):
+    #   - matched_alert: HTML alert text, or None when nothing matched.
+    #   - kill_after_alert: True only for TERMINAL conditions (billing/credit/
+    #     weekly/5-hour/session/auth). Transient errors (rate limit, overloaded)
+    #     return False so the session is left alive for Claude's own retry.
+    #   - is_auth: stale/invalid credentials — caller adds a restart backoff.
+    #   - no_conversation: "no conversation found to continue" — caller resets
+    #     the session id to "new" and restarts fresh.
+    lower_buf = pty_buffer.lower()
+
+    def is_fresh(kws: list) -> bool:
+        max_idx = -1
+        for kw in kws:
+            idx = lower_buf.rfind(kw)
+            if idx > max_idx:
+                max_idx = idx
+        if max_idx == -1:
+            return False
+        suffix = pty_buffer[max_idx:]
+        return "❯" not in suffix
+
+    matched_alert = None
+    kill_after_alert = False
+    is_auth = False
+    no_conversation = False
+
+    if ("ratelimiterror" in lower_buf or "rate limit reached" in lower_buf or "rate limit exceeded" in lower_buf) and is_fresh(["ratelimiterror", "rate limit reached", "rate limit exceeded"]):
+        matched_alert = "⚠️ <b>Claude Code: Превышен лимит запросов (Rate Limit).</b> Пожалуйста, подождите."
+    elif ("overloadederror" in lower_buf or ("overloaded" in lower_buf and "error" in lower_buf)) and is_fresh(["overloadederror", "overloaded"]):
+        matched_alert = "⚠️ <b>Claude Code: Серверы Anthropic перегружены (Overloaded).</b> Пожалуйста, повторите попытку."
+    elif "billing limit" in lower_buf and is_fresh(["billing limit"]):
+        matched_alert = "⚠️ <b>Claude Code: Достигнут лимит оплаты (Billing Limit).</b>"
+        kill_after_alert = True
+    elif ("credit balance too low" in lower_buf or "insufficient credit" in lower_buf or "insufficient funds" in lower_buf) and is_fresh(["credit balance too low", "insufficient credit", "insufficient funds"]):
+        matched_alert = "⚠️ <b>Claude Code: Недостаточно средств на балансе API.</b>"
+        kill_after_alert = True
+    elif (("reached your weekly limit" in lower_buf or "weekly limit reached" in lower_buf or "weekly budget exceeded" in lower_buf or
+          (("weekly limit" in lower_buf or "weekly budget" in lower_buf) and
+           ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf))) and not (
+          ("plan's weekly usage limit" in lower_buf or "weekly usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf))) and is_fresh(["reached your weekly limit", "weekly limit reached", "weekly budget exceeded", "weekly limit", "weekly budget"]):
+        matched_alert = "⚠️ <b>Claude Code: Достигнут недельный лимит использования.</b>"
+        kill_after_alert = True
+    elif (("reached your 5-hour limit" in lower_buf or "5-hour limit reached" in lower_buf or "5-hour budget exceeded" in lower_buf or
+          (("5-hour limit" in lower_buf or "5-hour budget" in lower_buf or "5-hour window" in lower_buf) and
+           ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf))) and not (
+          ("plan's 5-hour usage limit" in lower_buf or "5-hour usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf))) and is_fresh(["reached your 5-hour limit", "5-hour limit reached", "5-hour budget exceeded", "5-hour limit", "5-hour budget", "5-hour window"]):
+        matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
+        kill_after_alert = True
+    elif ("hit your session limit" in lower_buf or ("session limit" in lower_buf and "resets" in lower_buf)) and is_fresh(["hit your session limit", "session limit"]):
+        reset_time = ""
+        m = re.search(r"resets\s+([^\n·•]+)", pty_buffer, re.IGNORECASE)
+        if m:
+            reset_time = f" Сброс: <b>{m.group(1).strip()}</b>."
+        matched_alert = f"⏳ <b>Claude Code: Достигнут лимит сессии.</b>{reset_time} Бот перезапустится автоматически."
+        kill_after_alert = True
+    elif ("invalid authentication credentials" in lower_buf or "api error: 401" in lower_buf or "please run /login" in lower_buf) and is_fresh(["invalid authentication credentials", "api error: 401", "please run /login"]):
+        matched_alert = "⚠️ <b>Сессия устарела или недействительна.</b> Пожалуйста, выполните повторную авторизацию с помощью команды /login."
+        is_auth = True
+        kill_after_alert = True
+    elif "no conversation found to continue" in lower_buf:
+        no_conversation = True
+
+    return matched_alert, kill_after_alert, is_auth, no_conversation
+
 def delete_thinking_message() -> None:
     try:
         thinking_path = STATE_DIR / "thinking_msg_id"
@@ -509,7 +588,7 @@ def delete_thinking_message() -> None:
         sys.stderr.write(f"Failed to delete thinking message: {e}\n")
 
 def clean_mcp_auth_cache() -> None:
-    """Remove plugin:claude-gram:telegram from MCP auth cache to prevent false auth blocks."""
+    # Remove plugin:claude-gram:telegram from MCP auth cache to prevent false auth blocks.
     try:
         cache_path = Path("##HOME##/.claude/mcp-needs-auth-cache.json")
         if not cache_path.exists():
@@ -543,17 +622,27 @@ def main() -> int:
     except Exception:
         pass
 
-    # Always start a fresh session on restart
+    # Resume the previous session when one exists; start fresh only when it does
+    # not (first run, or after a "no conversation found" recovery reset).
     import uuid
-    new_uuid = str(uuid.uuid4())
+    active_id = get_active_session_id()
+    last_model = ""
     try:
-        active_sess_file = Path("##HOME##/.claude/channels/telegram/active_session_id")
-        active_sess_file.parent.mkdir(parents=True, exist_ok=True)
-        active_sess_file.write_text(new_uuid, "utf-8")
+        if LAST_MODEL_FILE.exists():
+            last_model = LAST_MODEL_FILE.read_text("utf-8").strip()
     except Exception:
         pass
-    cmd.extend(["--session-id", new_uuid])
-    fork_for_model_change = False
+    session_args, persist_id, fork_for_model_change = build_session_args(
+        active_id, model_val or "", last_model, str(uuid.uuid4())
+    )
+    if persist_id:
+        try:
+            active_sess_file = Path("##HOME##/.claude/channels/telegram/active_session_id")
+            active_sess_file.parent.mkdir(parents=True, exist_ok=True)
+            active_sess_file.write_text(persist_id, "utf-8")
+        except Exception:
+            pass
+    cmd.extend(session_args)
 
     if sys.platform == "win32":
         # Windows PTY is not supported, run server.py standalone as fallback in wrapper
@@ -651,49 +740,10 @@ def main() -> int:
                 except Exception:
                     pass
 
-            if now - last_alert_time > 15.0:
-                matched_alert = None
-                lower_buf = pty_buffer.lower()
+            if startup_cleared and now - last_alert_time > 15.0:
+                matched_alert, kill_after_alert, is_auth, no_conversation = classify_pty_alert(pty_buffer)
 
-                def is_fresh(kws: list) -> bool:
-                    max_idx = -1
-                    for kw in kws:
-                        idx = lower_buf.rfind(kw)
-                        if idx > max_idx:
-                            max_idx = idx
-                    if max_idx == -1:
-                        return False
-                    suffix = pty_buffer[max_idx:]
-                    return "❯" not in suffix and "\u276f" not in suffix
-
-                if ("ratelimiterror" in lower_buf or "rate limit reached" in lower_buf or "rate limit exceeded" in lower_buf) and is_fresh(["ratelimiterror", "rate limit reached", "rate limit exceeded"]):
-                    matched_alert = "⚠️ <b>Claude Code: Превышен лимит запросов (Rate Limit).</b> Пожалуйста, подождите."
-                elif ("overloadederror" in lower_buf or ("overloaded" in lower_buf and "error" in lower_buf)) and is_fresh(["overloadederror", "overloaded"]):
-                    matched_alert = "⚠️ <b>Claude Code: Серверы Anthropic перегружены (Overloaded).</b> Пожалуйста, повторите попытку."
-                elif "billing limit" in lower_buf and is_fresh(["billing limit"]):
-                    matched_alert = "⚠️ <b>Claude Code: Достигнут лимит оплаты (Billing Limit).</b>"
-                elif ("credit balance too low" in lower_buf or "insufficient credit" in lower_buf or "insufficient funds" in lower_buf) and is_fresh(["credit balance too low", "insufficient credit", "insufficient funds"]):
-                    matched_alert = "⚠️ <b>Claude Code: Недостаточно средств на балансе API.</b>"
-                elif (("reached your weekly limit" in lower_buf or "weekly limit reached" in lower_buf or "weekly budget exceeded" in lower_buf or
-                      (("weekly limit" in lower_buf or "weekly budget" in lower_buf) and
-                       ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf))) and not (
-                      ("plan's weekly usage limit" in lower_buf or "weekly usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf))) and is_fresh(["reached your weekly limit", "weekly limit reached", "weekly budget exceeded", "weekly limit", "weekly budget"]):
-                    matched_alert = "⚠️ <b>Claude Code: Достигнут недельный лимит использования.</b>"
-                elif (("reached your 5-hour limit" in lower_buf or "5-hour limit reached" in lower_buf or "5-hour budget exceeded" in lower_buf or
-                      (("5-hour limit" in lower_buf or "5-hour budget" in lower_buf or "5-hour window" in lower_buf) and
-                       ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf))) and not (
-                      ("plan's 5-hour usage limit" in lower_buf or "5-hour usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf))) and is_fresh(["reached your 5-hour limit", "5-hour limit reached", "5-hour budget exceeded", "5-hour limit", "5-hour budget", "5-hour window"]):
-                    matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
-                elif ("hit your session limit" in lower_buf or ("session limit" in lower_buf and "resets" in lower_buf)) and is_fresh(["hit your session limit", "session limit"]):
-                    reset_time = ""
-                    m = re.search(r"resets\s+([^\n·•]+)", pty_buffer, re.IGNORECASE)
-                    if m:
-                        reset_time = f" Сброс: <b>{m.group(1).strip()}</b>."
-                    matched_alert = f"⏳ <b>Claude Code: Достигнут лимит сессии.</b>{reset_time} Бот перезапустится автоматически."
-                elif ("invalid authentication credentials" in lower_buf or "api error: 401" in lower_buf or "please run /login" in lower_buf) and is_fresh(["invalid authentication credentials", "api error: 401", "please run /login"]):
-                    matched_alert = "⚠️ <b>Сессия устарела или недействительна.</b> Пожалуйста, выполните повторную авторизацию с помощью команды /login."
-                    auth_failed = True
-                elif "no conversation found to continue" in lower_buf:
+                if no_conversation:
                     try:
                         active_sess_file = STATE_DIR / "active_session_id"
                         active_sess_file.write_text("new", encoding="utf-8")
@@ -705,15 +755,22 @@ def main() -> int:
                         pass
                     sys.exit(1)
 
+                if is_auth:
+                    auth_failed = True
+
                 if matched_alert:
                     delete_thinking_message()
                     send_telegram_alert(matched_alert)
                     last_alert_time = now
-                    if "лимит" in matched_alert or "Сессия устарела" in matched_alert:
+                    if kill_after_alert:
                         try:
                             os.kill(pid, signal.SIGKILL)
                         except Exception:
                             pass
+                        # On stale/invalid auth, back off before systemd restarts
+                        # us (RestartSec=5) so we don't hammer a dead credential.
+                        if auth_failed:
+                            time.sleep(30)
                         sys.exit(1)
                     for keyword in ["ratelimiterror", "rate limit reached", "rate limit exceeded",
                                     "overloadederror", "overloaded", "billing limit",

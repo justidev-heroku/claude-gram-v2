@@ -26,8 +26,50 @@ def _load_resume_hint_re():
     return eval(f"re.compile({m.group(1)})")
 
 
+def _load_build_session_args():
+    src = INSTALL_PY.read_text("utf-8")
+    fork = re.search(r"def should_fork_session\(.*?\n\n", src, re.S)
+    build = re.search(r"(def build_session_args\(.*?)\n\ndef classify_pty_alert", src, re.S)
+    assert fork and build, "build_session_args not found in install.py wrapper_code"
+    ns = {}
+    exec(fork.group(0), ns)          # dependency
+    exec(build.group(1), ns)
+    return ns["build_session_args"]
+
+
 should_fork_session = _load_should_fork_session()
 resume_hint_re = _load_resume_hint_re()
+build_session_args = _load_build_session_args()
+
+NEW_UUID = "11111111-2222-3333-4444-555555555555"
+ACTIVE = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_build_no_active_session_starts_fresh():
+    args, persist, fork = build_session_args("", "claude-sonnet-5", "claude-sonnet-5", NEW_UUID)
+    assert args == ["--session-id", NEW_UUID]
+    assert persist == NEW_UUID  # new id must be written to disk
+    assert fork is False
+
+
+def test_build_active_same_model_resumes_without_rewrite():
+    args, persist, fork = build_session_args(ACTIVE, "claude-sonnet-5", "claude-sonnet-5", NEW_UUID)
+    assert args == ["--resume", ACTIVE]
+    assert persist == ""  # file already holds ACTIVE
+    assert fork is False
+
+
+def test_build_active_model_changed_forks():
+    args, persist, fork = build_session_args(ACTIVE, "claude-opus-4-8", "claude-sonnet-5", NEW_UUID)
+    assert args == ["--resume", ACTIVE, "--fork-session"]
+    assert persist == ""  # minted id captured from resume hint
+    assert fork is True
+
+
+def test_build_active_no_last_model_does_not_fork():
+    args, _, fork = build_session_args(ACTIVE, "claude-opus-4-8", "", NEW_UUID)
+    assert args == ["--resume", ACTIVE]
+    assert fork is False
 
 
 def test_no_fork_when_model_unchanged():
