@@ -144,6 +144,7 @@ MODELS = [
     ("sonnet",  "claude-sonnet-4-6",        "Sonnet 4.6"),
     ("opus",    "claude-opus-4-8",          "Opus 4.8"),
     ("haiku",   "claude-haiku-4-5-20251001","Haiku 4.5"),
+    ("fable5",  "claude-fable-5",           "Fable 5"),
 ]
 
 EFFORT_LEVELS = [
