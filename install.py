@@ -517,7 +517,7 @@ def main() -> int:
         os.execvp(cmd[0], cmd)
         return 0
 
-    cmd = ["claude", "--plugin-dir", "##INSTALL_DIR##"]
+    cmd = ["claude", "--channels", "plugin:claude-gram@justidev-marketplace"]
     model_val = None
     try:
         settings_path = Path("##HOME##/.claude/settings.json")
@@ -652,7 +652,7 @@ def main() -> int:
                 except Exception:
                     pass
 
-            if startup_cleared and now - last_alert_time > 15.0:
+            if now - last_alert_time > 15.0:
                 matched_alert = None
                 lower_buf = pty_buffer.lower()
 
@@ -968,7 +968,7 @@ if __name__ == "__main__":
         print(f"\n{CLR_YELLOW}👉 Сейчас запустится Claude Code для одобрения плагина.{CLR_RESET}")
         print(f"{CLR_YELLOW}Пожалуйста, введите 'y' и нажмите Enter, когда появится запрос на подтверждение.{CLR_RESET}\n")
         time.sleep(2)
-        subprocess.run(["claude", "--plugin-dir", str(INSTALL_DIR), "-c", "exit"])
+        subprocess.run(["claude", "--channels", "plugin:claude-gram@justidev-marketplace", "-c", "exit"])
     except Exception as e:
         print(f"{CLR_RED}⚠️ Не удалось запустить интерактивное одобрение плагина: {e}{CLR_RESET}")
 
