@@ -652,7 +652,7 @@ def main() -> int:
                 except Exception:
                     pass
 
-            if now - last_alert_time > 15.0:
+            if startup_cleared and now - last_alert_time > 15.0:
                 matched_alert = None
                 lower_buf = pty_buffer.lower()
 
