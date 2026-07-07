@@ -508,8 +508,23 @@ def delete_thinking_message() -> None:
     except Exception as e:
         sys.stderr.write(f"Failed to delete thinking message: {e}\n")
 
+def clean_mcp_auth_cache() -> None:
+    """Remove plugin:claude-gram:telegram from MCP auth cache to prevent false auth blocks."""
+    try:
+        cache_path = Path("##HOME##/.claude/mcp-needs-auth-cache.json")
+        if not cache_path.exists():
+            return
+        data = json.loads(cache_path.read_text("utf-8"))
+        if "plugin:claude-gram:telegram" in data:
+            del data["plugin:claude-gram:telegram"]
+            cache_path.write_text(json.dumps(data), "utf-8")
+    except Exception:
+        pass
+
+
 def main() -> int:
     os.environ["CLAUDE_TELEGRAM_BACKGROUND"] = "1"
+    clean_mcp_auth_cache()
     cli = get_active_cli()
     if cli == "agy" or not Path("##HOME##/.claude/.credentials.json").exists():
         sys.stderr.write("No active credentials found. Running server.py standalone...\n")
@@ -528,33 +543,17 @@ def main() -> int:
     except Exception:
         pass
 
-    last_model = ""
+    # Always start a fresh session on restart
+    import uuid
+    new_uuid = str(uuid.uuid4())
     try:
-        if LAST_MODEL_FILE.exists():
-            last_model = LAST_MODEL_FILE.read_text("utf-8").strip()
+        active_sess_file = Path("##HOME##/.claude/channels/telegram/active_session_id")
+        active_sess_file.parent.mkdir(parents=True, exist_ok=True)
+        active_sess_file.write_text(new_uuid, "utf-8")
     except Exception:
         pass
-    fork_for_model_change = should_fork_session(model_val, last_model)
-
-    active_sess = get_active_session_id()
-    if active_sess:
-        session_file = Path(f"##HOME##/.claude/projects/-root/{active_sess}.jsonl")
-        if session_file.exists() and session_file.stat().st_size > 0:
-            cmd.extend(["--resume", active_sess])
-            if fork_for_model_change:
-                cmd.append("--fork-session")
-        else:
-            cmd.extend(["--session-id", active_sess])
-    else:
-        import uuid
-        new_uuid = str(uuid.uuid4())
-        try:
-            active_sess_file = Path("##HOME##/.claude/channels/telegram/active_session_id")
-            active_sess_file.parent.mkdir(parents=True, exist_ok=True)
-            active_sess_file.write_text(new_uuid, "utf-8")
-        except Exception:
-            pass
-        cmd.extend(["--session-id", new_uuid])
+    cmd.extend(["--session-id", new_uuid])
+    fork_for_model_change = False
 
     if sys.platform == "win32":
         # Windows PTY is not supported, run server.py standalone as fallback in wrapper

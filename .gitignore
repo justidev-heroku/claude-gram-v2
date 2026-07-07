@@ -8,3 +8,4 @@ history.db
 inbox/
 active_cli
 session_thread_id
+.in_use/
