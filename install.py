@@ -656,31 +656,42 @@ def main() -> int:
                 matched_alert = None
                 lower_buf = pty_buffer.lower()
 
-                if "ratelimiterror" in lower_buf or "rate limit reached" in lower_buf or "rate limit exceeded" in lower_buf:
+                def is_fresh(kws: list) -> bool:
+                    max_idx = -1
+                    for kw in kws:
+                        idx = lower_buf.rfind(kw)
+                        if idx > max_idx:
+                            max_idx = idx
+                    if max_idx == -1:
+                        return False
+                    suffix = pty_buffer[max_idx:]
+                    return "❯" not in suffix and "\u276f" not in suffix
+
+                if ("ratelimiterror" in lower_buf or "rate limit reached" in lower_buf or "rate limit exceeded" in lower_buf) and is_fresh(["ratelimiterror", "rate limit reached", "rate limit exceeded"]):
                     matched_alert = "⚠️ <b>Claude Code: Превышен лимит запросов (Rate Limit).</b> Пожалуйста, подождите."
-                elif "overloadederror" in lower_buf or ("overloaded" in lower_buf and "error" in lower_buf):
+                elif ("overloadederror" in lower_buf or ("overloaded" in lower_buf and "error" in lower_buf)) and is_fresh(["overloadederror", "overloaded"]):
                     matched_alert = "⚠️ <b>Claude Code: Серверы Anthropic перегружены (Overloaded).</b> Пожалуйста, повторите попытку."
-                elif "billing limit" in lower_buf:
+                elif "billing limit" in lower_buf and is_fresh(["billing limit"]):
                     matched_alert = "⚠️ <b>Claude Code: Достигнут лимит оплаты (Billing Limit).</b>"
-                elif "credit balance too low" in lower_buf or "insufficient credit" in lower_buf or "insufficient funds" in lower_buf:
+                elif ("credit balance too low" in lower_buf or "insufficient credit" in lower_buf or "insufficient funds" in lower_buf) and is_fresh(["credit balance too low", "insufficient credit", "insufficient funds"]):
                     matched_alert = "⚠️ <b>Claude Code: Недостаточно средств на балансе API.</b>"
-                elif ("reached your weekly limit" in lower_buf or "weekly limit reached" in lower_buf or "weekly budget exceeded" in lower_buf or
+                elif (("reached your weekly limit" in lower_buf or "weekly limit reached" in lower_buf or "weekly budget exceeded" in lower_buf or
                       (("weekly limit" in lower_buf or "weekly budget" in lower_buf) and
                        ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf))) and not (
-                      ("plan's weekly usage limit" in lower_buf or "weekly usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf)):
+                      ("plan's weekly usage limit" in lower_buf or "weekly usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf))) and is_fresh(["reached your weekly limit", "weekly limit reached", "weekly budget exceeded", "weekly limit", "weekly budget"]):
                     matched_alert = "⚠️ <b>Claude Code: Достигнут недельный лимит использования.</b>"
-                elif ("reached your 5-hour limit" in lower_buf or "5-hour limit reached" in lower_buf or "5-hour budget exceeded" in lower_buf or
+                elif (("reached your 5-hour limit" in lower_buf or "5-hour limit reached" in lower_buf or "5-hour budget exceeded" in lower_buf or
                       (("5-hour limit" in lower_buf or "5-hour budget" in lower_buf or "5-hour window" in lower_buf) and
                        ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf or "stop and wait" in lower_buf))) and not (
-                      ("plan's 5-hour usage limit" in lower_buf or "5-hour usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf)):
+                      ("plan's 5-hour usage limit" in lower_buf or "5-hour usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf))) and is_fresh(["reached your 5-hour limit", "5-hour limit reached", "5-hour budget exceeded", "5-hour limit", "5-hour budget", "5-hour window"]):
                     matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
-                elif "hit your session limit" in lower_buf or ("session limit" in lower_buf and "resets" in lower_buf):
+                elif ("hit your session limit" in lower_buf or ("session limit" in lower_buf and "resets" in lower_buf)) and is_fresh(["hit your session limit", "session limit"]):
                     reset_time = ""
                     m = re.search(r"resets\s+([^\n·•]+)", pty_buffer, re.IGNORECASE)
                     if m:
                         reset_time = f" Сброс: <b>{m.group(1).strip()}</b>."
                     matched_alert = f"⏳ <b>Claude Code: Достигнут лимит сессии.</b>{reset_time} Бот перезапустится автоматически."
-                elif "invalid authentication credentials" in lower_buf or "api error: 401" in lower_buf or "please run /login" in lower_buf:
+                elif ("invalid authentication credentials" in lower_buf or "api error: 401" in lower_buf or "please run /login" in lower_buf) and is_fresh(["invalid authentication credentials", "api error: 401", "please run /login"]):
                     matched_alert = "⚠️ <b>Сессия устарела или недействительна.</b> Пожалуйста, выполните повторную авторизацию с помощью команды /login."
                     auth_failed = True
                 elif "no conversation found to continue" in lower_buf:
