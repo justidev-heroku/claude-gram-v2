@@ -407,6 +407,93 @@ def load_goal() -> str:
         return ""
 
 
+_goal_check_task: asyncio.Task | None = None
+_goal_check_active: bool = False
+
+
+def schedule_goal_check(chat_id: str) -> None:
+    global _goal_check_task
+    if _goal_check_task and not _goal_check_task.done():
+        _goal_check_task.cancel()
+    _goal_check_task = asyncio.create_task(_delayed_goal_check(chat_id))
+
+
+async def _evaluate_goal(goal: str, history_text: str) -> tuple[bool, str]:
+    try:
+        creds = orjson.loads(Path("/root/.claude/.credentials.json").read_bytes())
+        token = creds["claudeAiOauth"]["accessToken"]
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+        }
+        payload = {
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 200,
+            "messages": [{
+                "role": "user",
+                "content": (
+                    f"You are evaluating whether a session goal has been achieved.\n\n"
+                    f"Goal: {goal}\n\n"
+                    f"Recent conversation:\n{history_text}\n\n"
+                    "Has the goal been fully achieved? Answer with exactly:\n"
+                    "MET: <one sentence why>\n"
+                    "or\n"
+                    "NOT MET: <one sentence what's still needed>"
+                ),
+            }],
+        }
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.post(
+                "https://api.anthropic.com/v1/messages",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                resp.raise_for_status()
+                data = orjson.loads(await resp.read())
+                text = data["content"][0]["text"].strip()
+                if text.upper().startswith("MET:"):
+                    return True, text[4:].strip()
+                reason = text[8:].strip() if text.upper().startswith("NOT MET:") else text
+                return False, reason
+    except Exception as e:
+        log(f"goal evaluate failed: {e}")
+        return False, f"evaluation error: {e}"
+
+
+async def _delayed_goal_check(chat_id: str) -> None:
+    global _goal_check_active
+    await asyncio.sleep(5)
+    goal = load_goal()
+    if not goal or _goal_check_active:
+        return
+    _goal_check_active = True
+    try:
+        history_text = await tool_history({"limit": 30})
+        met, reason = await _evaluate_goal(goal, history_text)
+        if met:
+            GOAL_FILE.unlink(missing_ok=True)
+            await bot.send_message(
+                chat_id,
+                "🎯 <b>Цель выполнена!</b>",
+                parse_mode="HTML",
+                **thread_kwargs(),
+            )
+        else:
+            feedback = f"Stop hook feedback:\n[{goal}]: {reason}"
+            meta = {
+                "chat_id": chat_id,
+                "user": "system",
+                "user_id": "system",
+                "ts": _iso(datetime.datetime.now(datetime.timezone.utc)),
+            }
+            await deliver(feedback, meta)
+    except Exception as e:
+        log(f"goal check failed: {e}")
+    finally:
+        _goal_check_active = False
+
+
 def assert_sendable(f: str) -> None:
     """Запрещает отправлять критические файлы сервера, скрытые папки и файлы вне разрешенных директорий."""
     try:
@@ -712,6 +799,8 @@ async def handle_tool_call(msg_id, params: dict) -> None:
     try:
         if name == "reply":
             result = await tool_reply(args)
+            if load_goal():
+                schedule_goal_check(str(args.get("chat_id", "")))
         elif name == "reply_file":
             result = await tool_reply_file(args)
         elif name == "reactions":
@@ -3089,6 +3178,7 @@ async def cmd_goal(msg: Message) -> None:
             f"🎯 <b>Цель сессии задана:</b>\n<blockquote>{arg}</blockquote>",
             parse_mode="HTML",
         )
+        await handle_inbound(msg, arg)
     else:
         current = load_goal()
         if current:
