@@ -59,6 +59,7 @@ from aiogram.types import (
 STATE_DIR = Path(os.environ.get("TELEGRAM_STATE_DIR") or (Path.home() / ".claude" / "channels" / "telegram"))
 ACCESS_FILE = STATE_DIR / "access.json"
 ENV_FILE = STATE_DIR / ".env"
+GOAL_FILE = STATE_DIR / "session_goal.txt"
 INBOX_DIR = STATE_DIR / "inbox"
 PID_FILE = STATE_DIR / "bot.pid"
 THREAD_FILE = STATE_DIR / "session_thread_id"
@@ -397,6 +398,13 @@ def save_access(a: dict) -> None:
     tmp.write_bytes(orjson.dumps(a, option=orjson.OPT_INDENT_2 | orjson.OPT_APPEND_NEWLINE))
     os.chmod(tmp, 0o600)
     tmp.rename(ACCESS_FILE)
+
+
+def load_goal() -> str:
+    try:
+        return GOAL_FILE.read_text("utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return ""
 
 
 def assert_sendable(f: str) -> None:
@@ -1126,7 +1134,7 @@ async def mcp_dispatch(msg: dict) -> None:
                     "experimental": {"claude/channel": {}, "claude/channel/permission": {}},
                 },
                 "serverInfo": {"name": "telegram", "version": "2.0.0"},
-                "instructions": INSTRUCTIONS,
+                "instructions": INSTRUCTIONS + (f"\n\nSession goal set by user: {load_goal()}" if load_goal() else ""),
             },
         )
     elif method == "tools/list":
@@ -3067,6 +3075,93 @@ async def cmd_delete_account(msg: Message) -> None:
         await msg.answer(f"{EMOJI_WARNING} Ошибка удаления профиля: {e}", parse_mode="HTML")
 
 
+@dp.message(Command("goal"))
+async def cmd_goal(msg: Message) -> None:
+    gated = dm_command_gate(msg)
+    if not gated or gated["senderId"] not in gated["access"]["allowFrom"]:
+        return
+    text = (msg.text or "").strip()
+    # Убираем "/goal" из начала
+    arg = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+    if arg:
+        GOAL_FILE.write_text(arg, encoding="utf-8")
+        await msg.answer(
+            f"🎯 <b>Цель сессии задана:</b>\n<blockquote>{arg}</blockquote>",
+            parse_mode="HTML",
+        )
+    else:
+        current = load_goal()
+        if current:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="Сбросить цель",
+                    callback_data="goal_clear",
+                    style="danger",
+                    icon_custom_emoji_id="5255949705740843980",
+                )
+            ]])
+            await msg.answer(
+                f"🎯 <b>Текущая цель сессии:</b>\n<blockquote>{current}</blockquote>",
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+        else:
+            await msg.answer(
+                "🎯 <b>Цель сессии не задана.</b>\n\n"
+                "Использование: <code>/goal &lt;текст цели&gt;</code>",
+                parse_mode="HTML",
+            )
+
+
+@dp.callback_query(F.data == "goal_clear")
+async def on_goal_clear(cb: CallbackQuery) -> None:
+    access = load_access()
+    if str(cb.from_user.id) not in access["allowFrom"]:
+        await cb.answer("Нет доступа.")
+        return
+    GOAL_FILE.unlink(missing_ok=True)
+    try:
+        await cb.message.edit_text("🎯 <b>Цель сессии сброшена.</b>", parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.answer("Сброшено")
+
+
+@dp.message(Command("restart"))
+async def cmd_restart(msg: Message) -> None:
+    gated = dm_command_gate(msg)
+    if not gated or gated["senderId"] not in gated["access"]["allowFrom"]:
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="Перезапустить",
+            callback_data="restart_confirm",
+            style="danger",
+            icon_custom_emoji_id="5345906554510012647",
+        ),
+        InlineKeyboardButton(
+            text="Отмена",
+            callback_data="restart_cancel",
+            style="primary",
+            icon_custom_emoji_id="5870657884844462243",
+        ),
+    ]])
+    await msg.answer(
+        f"{EMOJI_REFRESH} <b>Перезапустить бота?</b>",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+@dp.callback_query(F.data == "restart_cancel")
+async def on_restart_cancel(cb: CallbackQuery) -> None:
+    try:
+        await cb.message.edit_text("<b>Отменено.</b>", parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.answer()
+
+
 @dp.message(Command("close"))
 async def cmd_delete(msg: Message) -> None:
     gated = dm_command_gate(msg)
@@ -3395,6 +3490,8 @@ async def main() -> None:
                     BotCommand(command="effort", description="Настроить уровень effort"),
                     BotCommand(command="check_update", description="Проверить наличие обновлений"),
                     BotCommand(command="mcp_debug", description="Включить/выключить лог входящих MCP-сообщений"),
+                    BotCommand(command="goal", description="Задать или посмотреть цель сессии"),
+                    BotCommand(command="restart", description="Перезапустить бота"),
                 ],
                 scope=BotCommandScopeAllPrivateChats(),
             )
