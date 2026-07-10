@@ -1,5 +1,5 @@
 ---
-name: init
+name: telegram-init
 description: One-shot Telegram channel setup — save the bot token, capture the owner's Telegram ID, and lock the bot to that single user. Use when the user wants to set up Telegram from scratch, says "настрой телеграм", "init telegram", or pastes a bot token to get started.
 user-invocable: true
 allowed-tools:
