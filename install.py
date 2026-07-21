@@ -540,7 +540,7 @@ def classify_pty_alert(pty_buffer: str):
         matched_alert = "⚠️ <b>Сессия устарела или недействительна.</b> Пожалуйста, выполните повторную авторизацию с помощью команды /login."
         is_auth = True
         kill_after_alert = True
-    elif "no conversation found to continue" in lower_buf:
+    elif "no conversation found to continue" in lower_buf or "no conversation found with session id" in lower_buf:
         no_conversation = True
 
     return matched_alert, kill_after_alert, is_auth, no_conversation
@@ -739,6 +739,20 @@ def main() -> int:
                         LAST_MODEL_FILE.write_text(model_val, "utf-8")
                 except Exception:
                     pass
+
+            # A missing/dead session id is fatal within the first seconds, long
+            # before startup_cleared — check it on the raw buffer regardless.
+            if "no conversation found" in pty_buffer.lower():
+                try:
+                    active_sess_file = STATE_DIR / "active_session_id"
+                    active_sess_file.write_text("new", encoding="utf-8")
+                except Exception:
+                    pass
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+                sys.exit(1)
 
             if startup_cleared and now - last_alert_time > 15.0:
                 matched_alert, kill_after_alert, is_auth, no_conversation = classify_pty_alert(pty_buffer)

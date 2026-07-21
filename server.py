@@ -2868,13 +2868,14 @@ async def on_resume_callback(cb: CallbackQuery) -> None:
         return
         
     if subaction == "new":
-        import uuid as _uuid
-        project_dir = Path("/root/.claude/projects/-root")
-        new_uuid = str(_uuid.uuid4())
+        # Write the "new" sentinel, not a fresh uuid: the launcher treats any
+        # concrete id as resumable and would run `claude --resume <uuid>` against
+        # a session that was never created, crash-looping on "No conversation
+        # found". "new" makes the launcher mint the id and pass --session-id.
         try:
             active_sess_file = Path("/root/.claude/channels/telegram/active_session_id")
             active_sess_file.parent.mkdir(parents=True, exist_ok=True)
-            active_sess_file.write_text(new_uuid, "utf-8")
+            active_sess_file.write_text("new", "utf-8")
         except Exception as e:
             await cb.message.answer(f"{EMOJI_WARNING} Ошибка создания сессии: {e}", parse_mode="HTML")
             await cb.answer()
