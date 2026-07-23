@@ -3253,6 +3253,48 @@ async def on_restart_cancel(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+@dp.callback_query(F.data == "limit:ack")
+async def on_limit_ack(cb: CallbackQuery) -> None:
+    # Просто подтверждение — снимаем клавиатуру, ничего не отправляем Claude.
+    try:
+        await cb.message.edit_text("✅ Понял", parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.answer("Понял")
+
+
+@dp.callback_query(F.data == "limit:resume")
+async def on_limit_resume(cb: CallbackQuery) -> None:
+    access = load_access()
+    if str(cb.from_user.id) not in access["allowFrom"]:
+        await cb.answer("Нет доступа.")
+        return
+
+    frm = cb.from_user
+    meta = {
+        "chat_id": str(cb.message.chat.id),
+        "user": frm.username or str(frm.id),
+        "user_id": str(frm.id),
+        "ts": _iso(cb.message.date),
+        "message_id": str(cb.message.message_id),
+    }
+    await deliver("Continue from where you left off.", meta, thread_id=cb.message.message_thread_id)
+
+    try:
+        await cb.message.edit_text("▶️ Возобновляю работу…", parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.answer("Возобновляю")
+
+
 @dp.message(Command("close"))
 async def cmd_delete(msg: Message) -> None:
     gated = dm_command_gate(msg)

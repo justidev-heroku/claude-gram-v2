@@ -393,6 +393,7 @@ STATE_DIR = Path("##HOME##/.claude/channels/telegram")
 ACTIVE_CLI_FILE = STATE_DIR / "active_cli"
 LOG_FILE_PATH = STATE_DIR / "bot.log"
 LAST_MODEL_FILE = STATE_DIR / "last_launched_model"
+SESSION_LIMIT_FILE = STATE_DIR / "last_session_limit"
 
 def get_active_cli() -> str:
     if ACTIVE_CLI_FILE.exists():
@@ -481,14 +482,17 @@ def build_session_args(active_id: str, model_val: str, last_model: str, new_uuid
 
 def classify_pty_alert(pty_buffer: str):
     # Classify an error surfaced in Claude's PTY output. Pure, for testability.
-    # Returns (matched_alert, kill_after_alert, is_auth, no_conversation):
+    # Returns (matched_alert, kill_after_alert, is_auth, no_conversation, session_limit_reset):
     #   - matched_alert: HTML alert text, or None when nothing matched.
     #   - kill_after_alert: True only for TERMINAL conditions (billing/credit/
-    #     weekly/5-hour/session/auth). Transient errors (rate limit, overloaded)
-    #     return False so the session is left alive for Claude's own retry.
+    #     weekly/5-hour/auth). Transient errors (rate limit, overloaded) and the
+    #     session limit return False so the session is left alive.
     #   - is_auth: stale/invalid credentials — caller adds a restart backoff.
     #   - no_conversation: "no conversation found to continue" — caller resets
     #     the session id to "new" and restarts fresh.
+    #   - session_limit_reset: reset-time string (may be "") when a LIVE session
+    #     limit banner is recognised; None otherwise. Signals the caller to send
+    #     the two-button (ack / resume) alert instead of killing the session.
     lower_buf = pty_buffer.lower()
 
     def is_fresh(kws: list) -> bool:
@@ -506,6 +510,7 @@ def classify_pty_alert(pty_buffer: str):
     kill_after_alert = False
     is_auth = False
     no_conversation = False
+    session_limit_reset = None
 
     if ("ratelimiterror" in lower_buf or "rate limit reached" in lower_buf or "rate limit exceeded" in lower_buf) and is_fresh(["ratelimiterror", "rate limit reached", "rate limit exceeded"]):
         matched_alert = "⚠️ <b>Claude Code: Превышен лимит запросов (Rate Limit).</b> Пожалуйста, подождите."
@@ -529,13 +534,21 @@ def classify_pty_alert(pty_buffer: str):
           ("plan's 5-hour usage limit" in lower_buf or "5-hour usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf))) and is_fresh(["reached your 5-hour limit", "5-hour limit reached", "5-hour budget exceeded", "5-hour limit", "5-hour budget", "5-hour window"]):
         matched_alert = "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
         kill_after_alert = True
-    elif ("hit your session limit" in lower_buf or ("session limit" in lower_buf and "resets" in lower_buf)) and is_fresh(["hit your session limit", "session limit"]):
-        reset_time = ""
-        m = re.search(r"resets\s+([^\n·•]+)", pty_buffer, re.IGNORECASE)
+    elif ("hit your session limit" in lower_buf and "resets" in lower_buf and
+          ("/upgrade" in lower_buf or "usage-credits" in lower_buf or "/usage" in lower_buf) and
+          is_fresh(["hit your session limit", "session limit"])):
+        # LIVE session-limit banner only. The echoed agent error
+        # ("...API error: You've hit your session limit") lacks resets/upgrade
+        # and must NOT trigger. Do not kill — wait for reset + resume button.
+        reset_str = ""
+        m = re.search(r"resets\s+(\d{1,2}:\d{2}\s*[ap]m(?:\s*\([^)]*\))?)", pty_buffer, re.IGNORECASE)
         if m:
-            reset_time = f" Сброс: <b>{m.group(1).strip()}</b>."
-        matched_alert = f"⏳ <b>Claude Code: Достигнут лимит сессии.</b>{reset_time} Бот перезапустится автоматически."
-        kill_after_alert = True
+            reset_str = m.group(1).strip()
+        session_limit_reset = reset_str
+        matched_alert = ("⏳ <b>Claude Code: Достигнут лимит сессии.</b>" +
+                         (f" Сброс: <b>{reset_str}</b>." if reset_str else "") +
+                         " Дождитесь сброса и нажмите «Продолжить работу».")
+        kill_after_alert = False
     elif ("invalid authentication credentials" in lower_buf or "api error: 401" in lower_buf or "please run /login" in lower_buf) and is_fresh(["invalid authentication credentials", "api error: 401", "please run /login"]):
         matched_alert = "⚠️ <b>Сессия устарела или недействительна.</b> Пожалуйста, выполните повторную авторизацию с помощью команды /login."
         is_auth = True
@@ -543,7 +556,7 @@ def classify_pty_alert(pty_buffer: str):
     elif "no conversation found to continue" in lower_buf or "no conversation found with session id" in lower_buf:
         no_conversation = True
 
-    return matched_alert, kill_after_alert, is_auth, no_conversation
+    return matched_alert, kill_after_alert, is_auth, no_conversation, session_limit_reset
 
 def delete_thinking_message() -> None:
     try:
@@ -755,7 +768,37 @@ def main() -> int:
                 sys.exit(1)
 
             if startup_cleared and now - last_alert_time > 15.0:
-                matched_alert, kill_after_alert, is_auth, no_conversation = classify_pty_alert(pty_buffer)
+                matched_alert, kill_after_alert, is_auth, no_conversation, session_limit_reset = classify_pty_alert(pty_buffer)
+
+                if session_limit_reset is not None:
+                    # Live session-limit banner: never kill. Dedupe on the reset
+                    # signature so the same banner (repainted in the PTY) is not
+                    # re-sent. Buttons let the owner ack or resume after reset.
+                    signature = session_limit_reset or "unknown"
+                    prev_signature = ""
+                    try:
+                        if SESSION_LIMIT_FILE.exists():
+                            prev_signature = SESSION_LIMIT_FILE.read_text("utf-8").strip()
+                    except Exception:
+                        prev_signature = ""
+
+                    if signature != prev_signature:
+                        try:
+                            SESSION_LIMIT_FILE.write_text(signature, encoding="utf-8")
+                        except Exception:
+                            pass
+                        delete_thinking_message()
+                        send_telegram_alert(matched_alert, reply_markup={"inline_keyboard": [[
+                            {"text": "✅ Понял", "callback_data": "limit:ack"},
+                            {"text": "▶️ Продолжить работу", "callback_data": "limit:resume"},
+                        ]]})
+                        last_alert_time = now
+
+                    # Scrub keywords so the same buffer is not re-matched.
+                    for keyword in ["hit your session limit", "session limit"]:
+                        pty_buffer = re.sub(re.escape(keyword), f"[processed_{keyword}]", pty_buffer, flags=re.IGNORECASE)
+                    # Skip the generic matched_alert branch below.
+                    continue
 
                 if no_conversation:
                     try:

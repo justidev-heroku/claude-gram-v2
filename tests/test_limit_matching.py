@@ -37,14 +37,17 @@ def match_limit_alert(pty_buffer: str) -> str | None:
           ("plan's 5-hour usage limit" in lower_buf or "5-hour usage limit on" in lower_buf) and not ("what do you want to do" in lower_buf or "upgrade your plan" in lower_buf))
           and is_fresh(["reached your 5-hour limit", "5-hour limit reached", "5-hour budget exceeded", "5-hour limit", "5-hour budget", "5-hour window"])):
         return "⚠️ <b>Claude Code: Достигнут 5-часовой лимит использования. Пожалуйста, подождите сброса лимита.</b>"
-    elif (("hit your session limit" in lower_buf or ("session limit" in lower_buf and "resets" in lower_buf)) and 
+    elif ("hit your session limit" in lower_buf and "resets" in lower_buf and
+          ("/upgrade" in lower_buf or "usage-credits" in lower_buf or "/usage" in lower_buf) and
           is_fresh(["hit your session limit", "session limit"])):
         import re
-        reset_time = ""
-        m = re.search(r"resets\s+([^\n·•]+)", pty_buffer, re.IGNORECASE)
+        reset_str = ""
+        m = re.search(r"resets\s+(\d{1,2}:\d{2}\s*[ap]m(?:\s*\([^)]*\))?)", pty_buffer, re.IGNORECASE)
         if m:
-            reset_time = f" Сброс: <b>{m.group(1).strip()}</b>."
-        return f"⏳ <b>Claude Code: Достигнут лимит сессии.</b>{reset_time} Бот перезапустится автоматически."
+            reset_str = m.group(1).strip()
+        return ("⏳ <b>Claude Code: Достигнут лимит сессии.</b>" +
+                (f" Сброс: <b>{reset_str}</b>." if reset_str else "") +
+                " Дождитесь сброса и нажмите «Продолжить работу».")
     return None
 
 
@@ -66,12 +69,19 @@ def test_actual_5hour_limit_reached_triggers_alert():
 
 
 def test_historical_session_limit_with_prompt_ignored():
-    buffer = "You have hit your session limit. It resets at 5:10pm (Europe/Moscow).\nSome other output\n❯ Try 'write a test'"
+    buffer = "You have hit your session limit. Resets 5:10pm (UTC) /upgrade to finish.\nSome other output\n❯ Try 'write a test'"
+    assert match_limit_alert(buffer) is None
+
+
+def test_agent_error_echo_does_not_trigger_session_limit():
+    buffer = ('✻ Agent "X" failed: Agent terminated early due to an API error: '
+              "You've hit your session limit.")
     assert match_limit_alert(buffer) is None
 
 
 def test_actual_session_limit_without_prompt_triggers_alert():
-    buffer = "You have hit your session limit. It resets at 5:10pm (Europe/Moscow).\nupgrade your plan or wait."
+    buffer = "You've hit your session limit. Resets 5:10pm (UTC) /upgrade or /usage-credits to finish."
     alert = match_limit_alert(buffer)
     assert alert is not None
     assert "Достигнут лимит сессии" in alert
+    assert "5:10pm (UTC)" in alert
