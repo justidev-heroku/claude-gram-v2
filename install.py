@@ -267,6 +267,40 @@ def stop_mascot_animation():
     sys.stdout.flush()
 
 
+def resolve_service_user(home_dir) -> str:
+    """Владелец HOME — именно он должен быть User= в юните, иначе сервис
+    не прочитает свой же HOME. Логин из tty тут не годится: он падает без
+    управляющего терминала и под sudo возвращает вызывающего, а не владельца."""
+    try:
+        import pwd
+        return pwd.getpwuid(os.stat(str(home_dir)).st_uid).pw_name
+    except Exception:
+        return "root"
+
+
+def ensure_login_user() -> None:
+    """Идемпотентно создаёт системного пользователя claude-login.
+    Под ним выполняется изолированный OAuth-флоу команды /login в боте."""
+    if not sys.platform.startswith("linux"):
+        return
+    import pwd
+    try:
+        pwd.getpwnam("claude-login")
+        print(f"{CLR_GREEN}✅ Системный пользователь claude-login уже существует.{CLR_RESET}")
+        return
+    except KeyError:
+        pass
+    try:
+        subprocess.run(["sudo", "useradd", "-m", "-s", "/bin/bash", "claude-login"], check=True)
+        print(f"{CLR_GREEN}✅ Системный пользователь claude-login создан.{CLR_RESET}")
+    except Exception as e:
+        print(
+            f"{CLR_YELLOW}⚠️ Не удалось создать пользователя claude-login: {e}\n"
+            f"   Команда /login не будет работать, пока пользователь не создан вручную:\n"
+            f"   sudo useradd -m -s /bin/bash claude-login{CLR_RESET}"
+        )
+
+
 def main():
     print_banner()
     start_mascot_animation()
@@ -383,6 +417,7 @@ import json
 import os
 import re
 import select
+import shutil
 import sys
 import time
 import urllib.request
@@ -394,6 +429,17 @@ ACTIVE_CLI_FILE = STATE_DIR / "active_cli"
 LOG_FILE_PATH = STATE_DIR / "bot.log"
 LAST_MODEL_FILE = STATE_DIR / "last_launched_model"
 SESSION_LIMIT_FILE = STATE_DIR / "last_session_limit"
+
+def resolve_claude_bin() -> str:
+    # PATH в systemd-юните урезан, поэтому кроме which проверяем типовые пути.
+    found = shutil.which("claude")
+    if found:
+        return found
+    for cand in ("/usr/local/bin/claude", "/usr/bin/claude",
+                 os.path.expanduser("~/.local/bin/claude"), "##HOME##/.local/bin/claude"):
+        if os.path.exists(cand):
+            return cand
+    return "claude"
 
 def get_active_cli() -> str:
     if ACTIVE_CLI_FILE.exists():
@@ -664,7 +710,7 @@ def main() -> int:
         os.execvp(sys.executable, cmd)
         return 0
 
-    claude_bin = "/usr/bin/claude"
+    claude_bin = resolve_claude_bin()
     pid, fd = os.forkpty()
     if pid == 0:
         os.execvp(claude_bin, cmd)
@@ -1143,6 +1189,9 @@ if __name__ == "__main__":
             print(f"{CLR_RED}❌ Не удалось настроить launchd агент: {e}{CLR_RESET}")
 
     else:
+        # Пользователь claude-login нужен флоу /login — создаём до генерации юнита.
+        ensure_login_user()
+
         # systemd в Linux
         if Path("/run/systemd/system").exists() and shutil.which("systemctl"):
             service_content = f"""[Unit]
@@ -1152,7 +1201,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User={os.getlogin() if hasattr(os, "getlogin") else "root"}
+User={resolve_service_user(HOME_DIR)}
 WorkingDirectory={HOME_DIR}
 Environment=HOME={HOME_DIR}
 Environment=CLAUDE_ALLOW_ROOT=1

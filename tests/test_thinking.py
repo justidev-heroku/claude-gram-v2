@@ -9,6 +9,29 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import server
 
 
+class FakeHome:
+    """Stand-in for server.USER_HOME.
+
+    Account paths are built as ``USER_HOME / "..." / "..."``, so tests that want
+    to intercept them patch USER_HOME with this: every ``/`` extends a path
+    string, and any other attribute access is delegated to whatever mock the
+    resolver returns for the accumulated path.
+    """
+
+    def __init__(self, resolver, base="/root"):
+        self._resolver = resolver
+        self._path = base
+
+    def __truediv__(self, other):
+        return FakeHome(self._resolver, f"{self._path}/{other}")
+
+    def __str__(self):
+        return self._path
+
+    def __getattr__(self, name):
+        return getattr(self._resolver(self._path), name)
+
+
 class TestThinking(unittest.IsolatedAsyncioTestCase):
     async def test_start_thinking_creates_anim_task(self):
         server.bot = AsyncMock()
@@ -138,9 +161,9 @@ class TestUsageCommand(unittest.IsolatedAsyncioTestCase):
 
 class TestResumeCommand(unittest.IsolatedAsyncioTestCase):
     @patch("server.dm_command_gate")
-    @patch("server.Path")
+    @patch("server.USER_HOME")
     @patch("server.get_active_session_id")
-    async def test_cmd_resume_render(self, mock_get_active_session_id, mock_path_class, mock_gate):
+    async def test_cmd_resume_render(self, mock_get_active_session_id, mock_user_home, mock_gate):
         mock_get_active_session_id.return_value = "session1"
         mock_gate.return_value = {
             "senderId": "123",
@@ -149,7 +172,8 @@ class TestResumeCommand(unittest.IsolatedAsyncioTestCase):
         
         # Mock instances of Path
         mock_path_inst = MagicMock()
-        mock_path_class.return_value = mock_path_inst
+        mock_user_home.__truediv__ = lambda _self, _o: mock_path_inst
+        mock_path_inst.__truediv__ = lambda _self, _o: mock_path_inst
         mock_path_inst.exists.return_value = True
         mock_path_inst.read_text.return_value = ""
         
@@ -214,9 +238,9 @@ class TestResumeCommand(unittest.IsolatedAsyncioTestCase):
 
 class TestAccountManagement(unittest.IsolatedAsyncioTestCase):
     @patch("server.dm_command_gate")
-    @patch("server.Path")
+    @patch("server.USER_HOME")
     @patch("server.safe_restart")
-    async def test_cmd_delete_account_success(self, mock_restart, mock_path, mock_gate):
+    async def test_cmd_delete_account_success(self, mock_restart, mock_user_home, mock_gate):
         mock_gate.return_value = {
             "senderId": "123",
             "access": {"allowFrom": ["123"]}
@@ -246,7 +270,8 @@ class TestAccountManagement(unittest.IsolatedAsyncioTestCase):
                 return mock_active_json
             return MagicMock()
             
-        mock_path.side_effect = path_side_effect
+        fake_home = FakeHome(path_side_effect)
+        mock_user_home.__truediv__ = lambda _self, other: fake_home / other
         
         msg = AsyncMock()
         msg.text = "/delete_account test_acc"
@@ -259,9 +284,9 @@ class TestAccountManagement(unittest.IsolatedAsyncioTestCase):
         msg.answer.assert_called_once_with(f"{server.EMOJI_SUCCESS} Профиль <code>test_acc</code> успешно удален.", parse_mode="HTML")
 
     @patch("server.dm_command_gate")
-    @patch("server.Path")
+    @patch("server.USER_HOME")
     @patch("server.safe_restart")
-    async def test_cmd_delete_active_account_success(self, mock_restart, mock_path, mock_gate):
+    async def test_cmd_delete_active_account_success(self, mock_restart, mock_user_home, mock_gate):
         mock_gate.return_value = {
             "senderId": "123",
             "access": {"allowFrom": ["123"]}
@@ -290,7 +315,8 @@ class TestAccountManagement(unittest.IsolatedAsyncioTestCase):
                 return mock_active_json
             return MagicMock()
             
-        mock_path.side_effect = path_side_effect
+        fake_home = FakeHome(path_side_effect)
+        mock_user_home.__truediv__ = lambda _self, other: fake_home / other
         
         msg = AsyncMock()
         msg.text = "/delete_account active_acc"

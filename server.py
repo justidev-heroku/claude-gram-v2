@@ -14,11 +14,19 @@ Python MCP SDK validates them away.
 
 import asyncio
 import datetime
+import glob
 import os
 import re
+import shutil
+import stat
 import sys
 import time
 from pathlib import Path
+
+try:  # pwd отсутствует на Windows
+    import pwd
+except ImportError:  # pragma: no cover
+    pwd = None
 
 import aiohttp
 
@@ -56,6 +64,10 @@ from aiogram.types import (
 # Paths & env
 # ---------------------------------------------------------------------------
 
+# Домашний каталог владельца бота. Единственный источник истины для путей к
+# аккаунтам/токенам Claude Code — раньше они были захардкожены как /root.
+USER_HOME = Path(os.environ.get("CLAUDE_GRAM_HOME") or Path.home())
+
 STATE_DIR = Path(os.environ.get("TELEGRAM_STATE_DIR") or (Path.home() / ".claude" / "channels" / "telegram"))
 ACCESS_FILE = STATE_DIR / "access.json"
 ENV_FILE = STATE_DIR / ".env"
@@ -63,6 +75,42 @@ GOAL_FILE = STATE_DIR / "session_goal.txt"
 INBOX_DIR = STATE_DIR / "inbox"
 PID_FILE = STATE_DIR / "bot.pid"
 THREAD_FILE = STATE_DIR / "session_thread_id"
+
+
+def resolve_claude_bin() -> str:
+    """PATH у systemd-юнита урезан, поэтому кроме which проверяем типовые пути."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    for cand in ("/usr/local/bin/claude", "/usr/bin/claude", str(USER_HOME / ".local/bin/claude")):
+        if os.path.exists(cand):
+            return cand
+    return "claude"
+
+
+def write_secret(path: Path, content: str) -> None:
+    """Секреты (OAuth-токены) пишем только для владельца: 0600."""
+    path.write_text(content, "utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def harden_secret_permissions() -> None:
+    """Бэкфилл: старые профили аккаунтов писались с 0644. Ужимаем до 0600."""
+    patterns = (
+        str(USER_HOME / ".claude" / ".credentials*.json"),
+        str(USER_HOME / ".claude.*.json"),
+    )
+    for pattern in patterns:
+        for found in glob.glob(pattern):
+            try:
+                if stat.S_IMODE(os.stat(found).st_mode) & 0o177:
+                    os.chmod(found, 0o600)
+            except OSError:
+                pass
+
 
 # Загружаем .env в os.environ; переменные окружения процесса имеют приоритет.
 try:
@@ -421,7 +469,7 @@ def schedule_goal_check(chat_id: str) -> None:
 
 async def _evaluate_goal(goal: str, history_text: str) -> tuple[bool, str]:
     try:
-        creds = orjson.loads(Path("/root/.claude/.credentials.json").read_bytes())
+        creds = orjson.loads((USER_HOME / ".claude" / ".credentials.json").read_bytes())
         token = creds["claudeAiOauth"]["accessToken"]
         headers = {
             "Authorization": f"Bearer {token}",
@@ -1761,14 +1809,14 @@ def list_profiles() -> list[dict]:
     import glob
     import json
     profiles = []
-    files = glob.glob(str(Path.home() / ".claude" / ".credentials.*.json"))
+    files = glob.glob(str(USER_HOME / ".claude" / ".credentials.*.json"))
     for f in files:
         basename = os.path.basename(f)
         name = basename[len(".credentials."):-len(".json")]
         if not name:
             continue
         email = "Unknown"
-        claude_json_path = Path(f"/root/.claude.{name}.json")
+        claude_json_path = (USER_HOME / f".claude.{name}.json")
         if claude_json_path.exists():
             try:
                 data = json.loads(claude_json_path.read_text("utf-8"))
@@ -1779,7 +1827,7 @@ def list_profiles() -> list[dict]:
     return profiles
 
 def get_active_profile_email() -> str | None:
-    path = Path("/root/.claude.json")
+    path = (USER_HOME / ".claude.json")
     if path.exists():
         try:
             import json
@@ -2219,15 +2267,15 @@ async def save_logged_in_credentials(chat_id: str) -> None:
     src_credentials = Path("/home/claude-login/.claude/.credentials.json")
     src_claude_json = Path("/home/claude-login/.claude.json")
     
-    target_dir = Path("/root/.claude")
+    target_dir = (USER_HOME / ".claude")
     target_dir.mkdir(parents=True, exist_ok=True)
     target_credentials = target_dir / f".credentials.{name}.json"
-    target_claude_json = Path(f"/root/.claude.{name}.json")
+    target_claude_json = (USER_HOME / f".claude.{name}.json")
     
     if src_credentials.exists():
-        target_credentials.write_text(src_credentials.read_text("utf-8"), "utf-8")
+        write_secret(target_credentials, src_credentials.read_text("utf-8"))
         if src_claude_json.exists():
-            target_claude_json.write_text(src_claude_json.read_text("utf-8"), "utf-8")
+            write_secret(target_claude_json, src_claude_json.read_text("utf-8"))
             
         import json
         email = "Unknown"
@@ -2267,17 +2315,50 @@ async def cmd_login(msg: Message) -> None:
     if not re.match(r"^[a-zA-Z0-9_-]+$", name):
         await msg.answer(f"{EMOJI_WARNING} Имя профиля должно содержать только буквы, цифры, дефисы и подчеркивания.", parse_mode="HTML")
         return
-        
+
+    # Флоу выполняется под изолированным системным пользователем claude-login.
+    if pwd is not None:
+        try:
+            pwd.getpwnam("claude-login")
+        except KeyError:
+            await msg.answer(
+                f"{EMOJI_WARNING} Системный пользователь <code>claude-login</code> не найден.\n\n"
+                f"Он нужен для безопасной авторизации. Создай его командой:\n"
+                f"<code>sudo useradd -m -s /bin/bash claude-login</code>",
+                parse_mode="HTML")
+            return
+
+    # Без бинаря claude нечего запускать под claude-login.
+    if not os.path.exists(resolve_claude_bin()):
+        await msg.answer(
+            f"{EMOJI_WARNING} Исполняемый файл <code>claude</code> не найден.\n\n"
+            f"Проверял <code>PATH</code>, <code>/usr/local/bin</code>, <code>/usr/bin</code> "
+            f"и <code>~/.local/bin</code>.\n"
+            f"Установи Claude Code и повтори команду.",
+            parse_mode="HTML")
+        return
+
+    # Без root `sudo -u claude-login` спросит пароль в PTY и флоу зависнет навсегда.
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        await msg.answer(
+            f"{EMOJI_WARNING} Бот запущен не от root, поэтому <code>sudo -u claude-login</code> "
+            f"запросит пароль и авторизация зависнет.\n\n"
+            f"Запусти бота от root либо добавь правило в sudoers вручную "
+            f"(<code>sudo visudo -f /etc/sudoers.d/claude-gram</code>):\n"
+            f"<code>&lt;user&gt; ALL=(claude-login) NOPASSWD: /usr/local/bin/claude</code>",
+            parse_mode="HTML")
+        return
+
     await msg.answer(f"{EMOJI_REFRESH} Запускаю сессию авторизации Claude Code...", parse_mode="HTML")
     
     import pty
-    import os
-    import shutil
     import json
     import subprocess
-    
+
+    claude_bin = resolve_claude_bin()
+
     # Refresh claude-login config and inject trust settings
-    main_json = Path("/root/.claude.json")
+    main_json = (USER_HOME / ".claude.json")
     claude_login_json = Path("/home/claude-login/.claude.json")
     try:
         claude_login_dir = Path("/home/claude-login/.claude")
@@ -2301,12 +2382,16 @@ async def cmd_login(msg: Message) -> None:
             }
             claude_login_json.write_text(json.dumps(config), "utf-8")
             shutil.chown(str(claude_login_json), user="claude-login", group="claude-login")
+            try:
+                os.chmod(claude_login_json, 0o600)
+            except OSError:
+                pass
     except Exception as e:
         log(f"Failed to setup claude-login config: {e}")
         
     # Ensure logout of claude-login user
     try:
-        subprocess.run(["sudo", "-u", "claude-login", "/usr/bin/claude", "auth", "logout"], capture_output=True)
+        subprocess.run(["sudo", "-u", "claude-login", claude_bin, "auth", "logout"], capture_output=True)
     except Exception:
         pass
         
@@ -2317,7 +2402,7 @@ async def cmd_login(msg: Message) -> None:
         pid, fd = pty.fork()
         if pid == 0:
             os.chdir("/home/claude-login")
-            os.execvpe("sudo", ["sudo", "-u", "claude-login", "/usr/bin/claude", "auth", "login"], env)
+            os.execvpe("sudo", ["sudo", "-u", "claude-login", claude_bin, "auth", "login"], env)
             sys.exit(1)
             
         active_login_flows[chat_id] = {
@@ -2377,22 +2462,22 @@ async def cmd_save_account(msg: Message) -> None:
         await msg.answer(f"{EMOJI_WARNING} Имя профиля должно содержать только буквы, цифры, дефисы и подчеркивания.", parse_mode="HTML")
         return
         
-    active_credentials = Path("/root/.claude/.credentials.json")
-    active_claude_json = Path("/root/.claude.json")
+    active_credentials = (USER_HOME / ".claude" / ".credentials.json")
+    active_claude_json = (USER_HOME / ".claude.json")
     
     if not active_credentials.exists():
         await msg.answer(f"{EMOJI_WARNING} Текущая активная сессия авторизации Claude Code отсутствует на сервере.", parse_mode="HTML")
         return
         
     try:
-        target_dir = Path("/root/.claude")
+        target_dir = (USER_HOME / ".claude")
         target_dir.mkdir(parents=True, exist_ok=True)
         target_credentials = target_dir / f".credentials.{name}.json"
-        target_claude_json = Path(f"/root/.claude.{name}.json")
+        target_claude_json = (USER_HOME / f".claude.{name}.json")
         
-        target_credentials.write_text(active_credentials.read_text("utf-8"), "utf-8")
+        write_secret(target_credentials, active_credentials.read_text("utf-8"))
         if active_claude_json.exists():
-            target_claude_json.write_text(active_claude_json.read_text("utf-8"), "utf-8")
+            write_secret(target_claude_json, active_claude_json.read_text("utf-8"))
             
         import json
         email = "Unknown"
@@ -2574,6 +2659,10 @@ async def refresh_oauth_token(creds_path: Path) -> str:
             oauth["expiresAt"] = int(time.time() * 1000) + resp_data["expires_in"] * 1000
         creds["claudeAiOauth"] = oauth
         creds_path.write_bytes(orjson.dumps(creds, option=orjson.OPT_INDENT_2))
+        try:
+            os.chmod(creds_path, 0o600)
+        except OSError:
+            pass
         _refresh_cooldown.pop(cache_key, None)
         return "refreshed"
     except Exception as e:
@@ -2593,8 +2682,8 @@ async def cmd_switch_account(msg: Message) -> None:
         return
         
     name = args[1].strip()
-    target_credentials = Path(f"/root/.claude/.credentials.{name}.json")
-    target_claude_json = Path(f"/root/.claude.{name}.json")
+    target_credentials = (USER_HOME / ".claude" / f".credentials.{name}.json")
+    target_claude_json = (USER_HOME / f".claude.{name}.json")
     
     if not target_credentials.exists():
         await msg.answer(f"{EMOJI_WARNING} Профиль <code>{name}</code> не найден. Используйте <code>/accounts</code> для просмотра списка.", parse_mode="HTML")
@@ -2621,12 +2710,12 @@ async def cmd_switch_account(msg: Message) -> None:
                 await msg.answer(f"{EMOJI_WARNING} Не удалось обновить токен. Попробуй войти заново через <code>/login {name}</code>.", parse_mode="HTML")
             return
 
-        active_credentials = Path("/root/.claude/.credentials.json")
-        active_claude_json = Path("/root/.claude.json")
+        active_credentials = (USER_HOME / ".claude" / ".credentials.json")
+        active_claude_json = (USER_HOME / ".claude.json")
 
-        active_credentials.write_text(target_credentials.read_text("utf-8"), "utf-8")
+        write_secret(active_credentials, target_credentials.read_text("utf-8"))
         if target_claude_json.exists():
-            active_claude_json.write_text(target_claude_json.read_text("utf-8"), "utf-8")
+            write_secret(active_claude_json, target_claude_json.read_text("utf-8"))
         else:
             try:
                 active_claude_json.unlink()
@@ -2656,7 +2745,7 @@ async def cmd_switch_account(msg: Message) -> None:
         await msg.answer(f"{EMOJI_WARNING} Ошибка переключения: {e}", parse_mode="HTML")
 
 def get_active_session_id() -> str:
-    active_sess_file = Path("/root/.claude/channels/telegram/active_session_id")
+    active_sess_file = (USER_HOME / ".claude" / "channels" / "telegram" / "active_session_id")
     if active_sess_file.exists():
         try:
             val = active_sess_file.read_text("utf-8").strip()
@@ -2668,7 +2757,7 @@ def get_active_session_id() -> str:
 
 
 def make_resume_keyboard(page: int = 1) -> InlineKeyboardMarkup:
-    project_dir = Path("/root/.claude/projects/-root")
+    project_dir = (USER_HOME / ".claude" / "projects" / "-root")
     if not project_dir.exists():
         return InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
@@ -2823,7 +2912,7 @@ async def cmd_resume(msg: Message) -> None:
     if not gated or gated["senderId"] not in gated["access"]["allowFrom"]:
         return
 
-    active_credentials = Path("/root/.claude/.credentials.json")
+    active_credentials = (USER_HOME / ".claude" / ".credentials.json")
     if not active_credentials.exists():
         await msg.answer(f"{EMOJI_WARNING} Нет активной авторизации в Claude Code. Пожалуйста, выполните вход через <code>/login</code>.", parse_mode="HTML")
         return
@@ -2874,7 +2963,7 @@ async def on_resume_callback(cb: CallbackQuery) -> None:
         # a session that was never created, crash-looping on "No conversation
         # found". "new" makes the launcher mint the id and pass --session-id.
         try:
-            active_sess_file = Path("/root/.claude/channels/telegram/active_session_id")
+            active_sess_file = (USER_HOME / ".claude" / "channels" / "telegram" / "active_session_id")
             active_sess_file.parent.mkdir(parents=True, exist_ok=True)
             active_sess_file.write_text("new", "utf-8")
         except Exception as e:
@@ -2896,14 +2985,14 @@ async def on_resume_callback(cb: CallbackQuery) -> None:
         
     if subaction == "sel":
         session_id = action_parts[2]
-        session_file = Path(f"/root/.claude/projects/-root/{session_id}.jsonl")
+        session_file = (USER_HOME / ".claude" / "projects" / "-root" / f"{session_id}.jsonl")
         if not session_file.exists():
             await cb.message.answer(f"{EMOJI_WARNING} Файл сессии не найден.", parse_mode="HTML")
             await cb.answer()
             return
         try:
             os.utime(session_file, None)
-            active_sess_file = Path("/root/.claude/channels/telegram/active_session_id")
+            active_sess_file = (USER_HOME / ".claude" / "channels" / "telegram" / "active_session_id")
             active_sess_file.parent.mkdir(parents=True, exist_ok=True)
             active_sess_file.write_text(session_id, "utf-8")
         except Exception as e:
@@ -2957,7 +3046,7 @@ def _format_msk(ts) -> str:
 
 
 async def fetch_usage_data() -> dict:
-    creds = orjson.loads(Path("/root/.claude/.credentials.json").read_bytes())
+    creds = orjson.loads((USER_HOME / ".claude" / ".credentials.json").read_bytes())
     token = creds["claudeAiOauth"]["accessToken"]
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession(headers=headers) as session:
@@ -2975,7 +3064,7 @@ async def cmd_usage(msg: Message) -> None:
     if not gated or gated["senderId"] not in gated["access"]["allowFrom"]:
         return
 
-    active_credentials = Path("/root/.claude/.credentials.json")
+    active_credentials = (USER_HOME / ".claude" / ".credentials.json")
     if not active_credentials.exists():
         await msg.answer(f"{EMOJI_WARNING} Нет активной авторизации в Claude Code. Пожалуйста, выполните вход через <code>/login</code>.", parse_mode="HTML")
         return
@@ -3038,7 +3127,7 @@ async def usage_watch_loop(shutdown_evt: asyncio.Event, bot: Bot) -> None:
 
     while not shutdown_evt.is_set():
         try:
-            if not Path("/root/.claude/.credentials.json").exists():
+            if not (USER_HOME / ".claude" / ".credentials.json").exists():
                 pass
             else:
                 data = await fetch_usage_data()
@@ -3091,8 +3180,8 @@ async def cmd_logout(msg: Message) -> None:
         return
         
     try:
-        active_credentials = Path("/root/.claude/.credentials.json")
-        active_claude_json = Path("/root/.claude.json")
+        active_credentials = (USER_HOME / ".claude" / ".credentials.json")
+        active_claude_json = (USER_HOME / ".claude.json")
         
         if active_credentials.exists():
             active_credentials.unlink()
@@ -3121,16 +3210,16 @@ async def cmd_delete_account(msg: Message) -> None:
         return
         
     name = args[1].strip()
-    target_credentials = Path(f"/root/.claude/.credentials.{name}.json")
-    target_claude_json = Path(f"/root/.claude.{name}.json")
+    target_credentials = (USER_HOME / ".claude" / f".credentials.{name}.json")
+    target_claude_json = (USER_HOME / f".claude.{name}.json")
     
     if not target_credentials.exists():
         await msg.answer(f"{EMOJI_WARNING} Профиль <code>{name}</code> не найден.", parse_mode="HTML")
         return
         
     try:
-        active_credentials = Path("/root/.claude/.credentials.json")
-        active_claude_json = Path("/root/.claude.json")
+        active_credentials = (USER_HOME / ".claude" / ".credentials.json")
+        active_claude_json = (USER_HOME / ".claude.json")
         
         is_active = False
         if active_credentials.exists():
@@ -3601,6 +3690,8 @@ def cleanup_inbox() -> None:
 async def main() -> None:
     global bot_username
 
+    harden_secret_permissions()
+
     if os.environ.get("CLAUDE_TELEGRAM_BACKGROUND") == "1":
         cleanup_inbox()
         try:
@@ -3662,7 +3753,7 @@ async def main() -> None:
             active_id = get_active_session_id()
             session_display = ""
             if active_id:
-                session_file = Path(f"/root/.claude/projects/-root/{active_id}.jsonl")
+                session_file = (USER_HOME / ".claude" / "projects" / "-root" / f"{active_id}.jsonl")
                 if session_file.exists():
                     try:
                         with open(session_file, 'r', encoding='utf-8') as fh:
